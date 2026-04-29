@@ -24,3 +24,7 @@ env/
 # Runtime
 digest.log
 *.log
+
+# Claude Code — project-shared OK, personal state ignored
+.claude/settings.local.json
+.claude/hooks/gsd-*.js
