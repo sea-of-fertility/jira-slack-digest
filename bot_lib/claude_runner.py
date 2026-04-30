@@ -1,6 +1,6 @@
 import json
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 DEFAULT_DISALLOWED = ("Bash", "WebFetch", "WebSearch")
@@ -18,6 +18,41 @@ class ClaudeError(Exception):
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    """Token + cost figures pulled from `claude -p --output-format json`.
+
+    Aggregates across retry attempts via __add__.
+    """
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    total_cost_usd: float = 0.0
+
+    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        return TokenUsage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens + other.cache_creation_input_tokens,
+            cache_read_input_tokens=self.cache_read_input_tokens + other.cache_read_input_tokens,
+            total_cost_usd=self.total_cost_usd + other.total_cost_usd,
+        )
+
+    @property
+    def total_input(self) -> int:
+        return self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens
+
+    @property
+    def is_empty(self) -> bool:
+        return (
+            self.input_tokens == 0
+            and self.output_tokens == 0
+            and self.cache_creation_input_tokens == 0
+            and self.cache_read_input_tokens == 0
+        )
+
+
+@dataclass(frozen=True)
 class ClaudeRun:
     stdout: str
     stderr: str
@@ -25,6 +60,18 @@ class ClaudeRun:
     result: str
     session_id: Optional[str]
     raw_json: Optional[dict]
+    usage: TokenUsage = field(default_factory=TokenUsage)
+
+
+def _parse_usage(data: dict) -> TokenUsage:
+    u = data.get("usage") or {}
+    return TokenUsage(
+        input_tokens=int(u.get("input_tokens", 0) or 0),
+        output_tokens=int(u.get("output_tokens", 0) or 0),
+        cache_creation_input_tokens=int(u.get("cache_creation_input_tokens", 0) or 0),
+        cache_read_input_tokens=int(u.get("cache_read_input_tokens", 0) or 0),
+        total_cost_usd=float(data.get("total_cost_usd", 0.0) or 0.0),
+    )
 
 
 def run_claude(
@@ -69,6 +116,7 @@ def run_claude(
     raw_json: Optional[dict] = None
     result = proc.stdout
     session_id: Optional[str] = None
+    usage = TokenUsage()
     stripped = proc.stdout.strip()
     if stripped:
         try:
@@ -79,6 +127,7 @@ def run_claude(
             raw_json = data
             result = data.get("result", proc.stdout)
             session_id = data.get("session_id")
+            usage = _parse_usage(data)
 
     return ClaudeRun(
         stdout=proc.stdout,
@@ -87,4 +136,5 @@ def run_claude(
         result=result,
         session_id=session_id,
         raw_json=raw_json,
+        usage=usage,
     )

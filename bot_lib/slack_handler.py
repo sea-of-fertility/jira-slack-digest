@@ -150,6 +150,9 @@ def format_outcome(outcome: orchestrator.JobOutcome) -> str:
         if outcome.test_status:
             attempts_part = f" (attempt {outcome.attempts}/3)" if outcome.attempts else ""
             lines.append(f"테스트: {outcome.test_status.upper()}{attempts_part}")
+        usage_line = _format_usage(outcome.usage)
+        if usage_line:
+            lines.append(usage_line)
         if outcome.pr_url:
             lines.append(f"PR: {outcome.pr_url}")
         if outcome.message and outcome.message != "완료":
@@ -164,4 +167,24 @@ def format_outcome(outcome: orchestrator.JobOutcome) -> str:
         lines.append(f"테스트: {outcome.test_status.upper()}")
     if outcome.attempts:
         lines.append(f"attempts: {outcome.attempts}")
+    usage_line = _format_usage(outcome.usage)
+    if usage_line:
+        lines.append(usage_line)
     return "\n".join(lines)
+
+
+def _format_usage(usage) -> str:
+    """One-line token + cost summary, or empty string if nothing was used."""
+    if usage is None or usage.is_empty:
+        return ""
+    parts = [
+        f"in={usage.input_tokens:,}",
+        f"out={usage.output_tokens:,}",
+    ]
+    if usage.cache_read_input_tokens or usage.cache_creation_input_tokens:
+        parts.append(
+            f"cache(read={usage.cache_read_input_tokens:,}, "
+            f"create={usage.cache_creation_input_tokens:,})"
+        )
+    cost_str = f" — ${usage.total_cost_usd:.4f}" if usage.total_cost_usd > 0 else ""
+    return f"토큰: {' '.join(parts)}{cost_str}"

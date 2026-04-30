@@ -221,6 +221,54 @@ def test_format_failed_includes_attempts():
     assert "3" in msg
 
 
+# ---- token usage in outcome ----
+
+
+def test_format_includes_token_usage_on_success():
+    from bot_lib.claude_runner import TokenUsage
+    out = orchestrator.JobOutcome(
+        status=orchestrator.SUCCESS, branch="fix/CDS-99",
+        commit_sha="a" * 40, diff_stat=" 1 file changed",
+        test_status="pass", pr_url="https://pr",
+        message="완료", attempts=1,
+        usage=TokenUsage(
+            input_tokens=12345, output_tokens=678,
+            cache_read_input_tokens=2000, cache_creation_input_tokens=500,
+            total_cost_usd=0.0234,
+        ),
+    )
+    msg = format_outcome(out)
+    assert "in=12,345" in msg
+    assert "out=678" in msg
+    assert "cache(read=2,000, create=500)" in msg
+    assert "$0.0234" in msg
+
+
+def test_format_omits_usage_when_empty():
+    from bot_lib.claude_runner import TokenUsage
+    out = orchestrator.JobOutcome(
+        status=orchestrator.SUCCESS, branch="fix/CDS-99",
+        commit_sha=None, diff_stat="", test_status="skip",
+        pr_url=None, message="완료", attempts=1,
+        usage=TokenUsage(),
+    )
+    msg = format_outcome(out)
+    assert "토큰" not in msg
+
+
+def test_format_includes_usage_on_failed_outcome():
+    from bot_lib.claude_runner import TokenUsage
+    out = orchestrator.JobOutcome(
+        status=orchestrator.FAILED, branch="fix/CDS-99",
+        commit_sha=None, diff_stat="", test_status="fail",
+        pr_url=None, message="3회 소진", attempts=3,
+        usage=TokenUsage(input_tokens=5000, output_tokens=300, total_cost_usd=0.025),
+    )
+    msg = format_outcome(out)
+    assert "in=5,000" in msg
+    assert "$0.0250" in msg
+
+
 # ---- mutex (§12 Q8) ----
 
 

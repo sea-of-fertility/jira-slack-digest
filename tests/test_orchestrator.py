@@ -220,6 +220,42 @@ def _stub_test_results(monkeypatch, statuses):
     monkeypatch.setattr("bot_lib.orchestrator.test_runner.run_tests", fake)
 
 
+def test_usage_aggregates_across_attempts(project_with_remote, monkeypatch):
+    """orchestrator should sum claude_runner.usage from every attempt."""
+    project, _ = project_with_remote
+    _stub_fetch_issue(monkeypatch)
+    _stub_gh_pr_create(monkeypatch)
+
+    usages = [
+        claude_runner.TokenUsage(input_tokens=1000, output_tokens=200, total_cost_usd=0.05),
+        claude_runner.TokenUsage(input_tokens=500, output_tokens=100, total_cost_usd=0.02),
+    ]
+    plan = [
+        (lambda d: (d / "a.py").write_text("v1"), 0, "s-1", usages[0]),
+        (lambda d: (d / "a.py").write_text("v2"), 0, "s-1", usages[1]),
+    ]
+
+    def fake(cwd, prompt, **kwargs):
+        write_fn, rc, sid, usage = plan.pop(0)
+        write_fn(Path(cwd))
+        return claude_runner.ClaudeRun(
+            stdout="", stderr="", returncode=rc, result="ok",
+            session_id=sid, raw_json=None, usage=usage,
+        )
+
+    monkeypatch.setattr("bot_lib.orchestrator.claude_runner.run_claude", fake)
+    _stub_test_results(monkeypatch, [test_runner.FAIL, test_runner.PASS])
+
+    cmd = ParsedCmd(type="fix", repo="myrepo", issue="CDS-99", instruction="x")
+    out = execute_job(
+        cmd, project, jira_base_url="u", jira_email="e", jira_token="t"
+    )
+
+    assert out.usage.input_tokens == 1500
+    assert out.usage.output_tokens == 300
+    assert out.usage.total_cost_usd == pytest.approx(0.07)
+
+
 def test_retry_succeeds_on_attempt_2(project_with_remote, monkeypatch):
     project, _ = project_with_remote
     _stub_fetch_issue(monkeypatch)

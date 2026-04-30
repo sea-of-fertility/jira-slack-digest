@@ -1,10 +1,11 @@
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
 from bot_lib import claude_runner, git_ops, jira_client, test_runner
+from bot_lib.claude_runner import TokenUsage
 from bot_lib.commands import ParsedCmd
 from bot_lib.registry import Project
 
@@ -34,6 +35,7 @@ class JobOutcome:
     pr_url: Optional[str]
     message: str
     attempts: int = 0
+    usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 Progress = Callable[[str], None]
@@ -93,11 +95,12 @@ def execute_job(
             None,
             loop_result.aborted_message,
             attempts=loop_result.attempts,
+            usage=loop_result.usage,
         )
 
     # §7 step 9 — claude must have edited at least once
     if git_ops.is_clean(project.path):
-        return _failed(branch, "", "", None, "claude가 파일을 편집하지 않음")
+        return _failed(branch, "", "", None, "claude가 파일을 편집하지 않음", usage=loop_result.usage)
 
     test_status = loop_result.test_status
     if test_status not in (test_runner.PASS, test_runner.SKIP):
@@ -108,6 +111,7 @@ def execute_job(
             None,
             f"테스트 {test_status} (재시도 {loop_result.attempts}회 소진)",
             attempts=loop_result.attempts,
+            usage=loop_result.usage,
         )
 
     # §7 step 12
@@ -134,6 +138,7 @@ def execute_job(
             pr_url=None,
             message=f"commit 완료, push 실패: {e}",
             attempts=loop_result.attempts,
+            usage=loop_result.usage,
         )
 
     pr_url = _create_pr(project.path, cmd, issue)
@@ -147,6 +152,7 @@ def execute_job(
         pr_url=pr_url,
         message="완료",
         attempts=loop_result.attempts,
+        usage=loop_result.usage,
     )
 
 
@@ -158,6 +164,7 @@ class _LoopResult:
     test_status: str           # last seen status, may be ""
     attempts: int              # how many claude calls we made (1..MAX_ATTEMPTS)
     aborted_message: Optional[str]   # set iff loop ended without a usable test result
+    usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 def _run_with_retry(
@@ -176,6 +183,7 @@ def _run_with_retry(
     last_test: Optional[test_runner.RunResult] = None
     last_snapshot: Optional[str] = None
     attempts = 0
+    usage = TokenUsage()
 
     for n in range(1, MAX_ATTEMPTS + 1):
         if time.monotonic() >= deadline:
@@ -183,17 +191,20 @@ def _run_with_retry(
                 test_status=last_test.status if last_test else "",
                 attempts=attempts,
                 aborted_message=f"30분 cap 도달 (attempt {n})",
+                usage=usage,
             )
 
         attempts = n
         prompt = initial_prompt if n == 1 else _retry_prompt(last_test)
         say(f"attempt {n}/{MAX_ATTEMPTS}: claude 호출")
         run = _call_claude_with_fallback(project.path, prompt, session_id, say)
+        usage = usage + run.usage
         if run.returncode != 0:
             return _LoopResult(
                 test_status=last_test.status if last_test else "",
                 attempts=attempts,
                 aborted_message=f"claude 실패 (rc={run.returncode}): {run.stderr.strip()[:200]}",
+                usage=usage,
             )
         if run.session_id:
             session_id = run.session_id
@@ -205,6 +216,7 @@ def _run_with_retry(
                 test_status=last_test.status if last_test else "",
                 attempts=attempts,
                 aborted_message=f"attempt {n}: 추가 편집 없음, 재시도 종료",
+                usage=usage,
             )
         last_snapshot = snapshot
 
@@ -215,7 +227,8 @@ def _run_with_retry(
         )
         if last_test.status in (test_runner.PASS, test_runner.SKIP):
             return _LoopResult(
-                test_status=last_test.status, attempts=attempts, aborted_message=None
+                test_status=last_test.status, attempts=attempts,
+                aborted_message=None, usage=usage,
             )
         say(f"attempt {n}: {last_test.status}")
         # else: FAIL or TIMEOUT — try again
@@ -224,6 +237,7 @@ def _run_with_retry(
         test_status=last_test.status if last_test else "",
         attempts=attempts,
         aborted_message=None,
+        usage=usage,
     )
 
 
@@ -326,6 +340,7 @@ def _failed(
     sha: Optional[str],
     message: str,
     attempts: int = 0,
+    usage: TokenUsage = TokenUsage(),
 ) -> JobOutcome:
     return JobOutcome(
         status=FAILED,
@@ -336,4 +351,5 @@ def _failed(
         pr_url=None,
         message=message,
         attempts=attempts,
+        usage=usage,
     )

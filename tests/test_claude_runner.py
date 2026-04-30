@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from bot_lib.claude_runner import ClaudeError, ClaudeRun, run_claude
+from bot_lib.claude_runner import ClaudeError, ClaudeRun, TokenUsage, run_claude
 
 
 @dataclass
@@ -168,6 +168,71 @@ def test_nonzero_exit_does_not_raise(monkeypatch, tmp_path):
     )
     out = run_claude(str(tmp_path), "x")
     assert out.returncode == 2
+
+
+# ---- live (opt-in: pytest -m live) ----
+
+
+# ---- token usage ----
+
+
+def _ok_json_with_usage(result="done", session_id="s-1", usage=None, cost=0.0):
+    return json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "result": result,
+            "session_id": session_id,
+            "total_cost_usd": cost,
+            "usage": usage if usage is not None else {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 200,
+                "cache_read_input_tokens": 30,
+            },
+        }
+    )
+
+
+def test_usage_parsed_from_json(monkeypatch, tmp_path):
+    captured = {}
+    _install_fake_run(
+        monkeypatch, captured=captured,
+        proc=_FakeProc(stdout=_ok_json_with_usage(cost=0.0123)),
+    )
+    out = run_claude(str(tmp_path), "x")
+    assert out.usage.input_tokens == 100
+    assert out.usage.output_tokens == 50
+    assert out.usage.cache_creation_input_tokens == 200
+    assert out.usage.cache_read_input_tokens == 30
+    assert out.usage.total_cost_usd == pytest.approx(0.0123)
+
+
+def test_usage_missing_field_yields_zero(monkeypatch, tmp_path):
+    captured = {}
+    payload = json.dumps({"result": "ok", "session_id": "s-1"})  # no usage field
+    _install_fake_run(monkeypatch, captured=captured, proc=_FakeProc(stdout=payload))
+    out = run_claude(str(tmp_path), "x")
+    assert out.usage.is_empty
+    assert out.usage.total_cost_usd == 0.0
+
+
+def test_token_usage_addition_aggregates_fields():
+    a = TokenUsage(input_tokens=100, output_tokens=50, total_cost_usd=0.10)
+    b = TokenUsage(input_tokens=200, output_tokens=80, total_cost_usd=0.20)
+    s = a + b
+    assert s.input_tokens == 300
+    assert s.output_tokens == 130
+    assert s.total_cost_usd == pytest.approx(0.30)
+
+
+def test_token_usage_total_input_includes_cache():
+    u = TokenUsage(
+        input_tokens=100,
+        cache_creation_input_tokens=200,
+        cache_read_input_tokens=300,
+    )
+    assert u.total_input == 600
 
 
 # ---- live (opt-in: pytest -m live) ----
