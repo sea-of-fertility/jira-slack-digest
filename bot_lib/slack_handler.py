@@ -22,6 +22,11 @@ HELP_TEXT = (
     "  init/<repo>/<remote>  - 세션 컨텍스트 설정 (이후 3토큰 가능)\n"
     "  init/clear            - 컨텍스트 삭제\n"
     "  status                - 현재 컨텍스트·등록 repo 조회\n\n"
+    "조회:\n"
+    "  /branch               - 현재 컨텍스트 repo 의 최근 10개 브랜치\n"
+    "  /branch <repo>        - 명시한 repo 의 최근 10개\n"
+    "  /branch all           - 전체 (최대 50개)\n"
+    "  /branch <repo> all    - 명시 repo 전체\n\n"
     "기타:\n"
     "  help / 도움말         - 이 안내\n"
     "  cleanup/<repo>        - 워킹 트리 초기화"
@@ -30,6 +35,9 @@ HELP_TEXT = (
 
 CLEANUP_RE = re.compile(r"^cleanup/(\S+)$")
 INIT_RE = re.compile(r"^init/(\S+?)/(\S+)$")
+BRANCH_RE = re.compile(r"^/branch(?:\s+(.+))?$")
+BRANCH_DEFAULT_LIMIT = 10
+BRANCH_HARD_CAP = 50
 
 
 Say = Callable[[str], None]
@@ -74,6 +82,12 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
     init_match = INIT_RE.match(stripped)
     if init_match:
         _handle_init(init_match.group(1), init_match.group(2), deps, say)
+        return
+
+    # /branch [<repo>] [all]
+    branch_match = BRANCH_RE.match(stripped)
+    if branch_match:
+        _handle_branch(branch_match.group(1), deps, say)
         return
 
     # §12 Q15 — cleanup/<repo>
@@ -201,6 +215,82 @@ def _list_git_remotes(repo_path: str) -> list[str]:
     except git_ops.GitError:
         return []
     return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+# ---- /branch ----
+
+
+def _handle_branch(arg: Optional[str], deps: HandlerDeps, say: Say) -> None:
+    """`/branch [<repo>] [all]` — list recent branches of the chosen repo."""
+    repo_name, show_all = _parse_branch_arg(arg, deps)
+
+    if repo_name is None:
+        say(
+            "❌ 컨텍스트 미설정. `/branch <repo>` 로 명시하거나 `init/<repo>/<remote>` 로 설정하세요.\n"
+            f"등록된 repo: {', '.join(f'`{n}`' for n in sorted(deps.registry)) or '(없음)'}"
+        )
+        return
+
+    project = deps.registry.get(repo_name)
+    if project is None:
+        say(_unknown_repo_message(repo_name, deps.registry))
+        return
+
+    limit = BRANCH_HARD_CAP if show_all else BRANCH_DEFAULT_LIMIT
+    try:
+        branches, total = git_ops.list_local_branches(project.path, limit=limit)
+    except git_ops.GitError as e:
+        say(f"❌ 브랜치 조회 실패: {e}")
+        return
+
+    say(_format_branch_list(project, branches, total, show_all))
+
+
+def _parse_branch_arg(arg: Optional[str], deps: HandlerDeps) -> tuple[Optional[str], bool]:
+    """Return (repo_name, show_all). repo_name is None when neither
+    explicit nor context can resolve it."""
+    show_all = False
+    explicit_repo: Optional[str] = None
+
+    if arg:
+        tokens = arg.strip().split()
+        for tok in tokens:
+            if tok == "all":
+                show_all = True
+            elif explicit_repo is None:
+                explicit_repo = tok
+            # extra tokens silently ignored — keeps 'all <repo>' working both ways
+
+    if explicit_repo is not None:
+        return explicit_repo, show_all
+
+    ctx = deps.context.get() if deps.context else None
+    return (ctx.repo if ctx else None), show_all
+
+
+def _format_branch_list(project, branches, total: int, show_all: bool) -> str:
+    if not branches:
+        return f"`{project.name}` 에 브랜치 없음."
+
+    current = next((b for b in branches if b.is_current), None)
+    header_cur = f"현재: `{current.name}`" if current else "(detached HEAD)"
+    shown = len(branches)
+    if show_all or shown == total:
+        header = f"*{project.name}* ({header_cur}) — 전체 {total}개:"
+    else:
+        header = f"*{project.name}* ({header_cur}) — {total}개 중 최근 {shown}:"
+
+    name_w = max(len(b.name) for b in branches)
+    rows = []
+    for b in branches:
+        mark = " ⭐" if b.is_current else ""
+        rows.append(f"  {b.name.ljust(name_w)}  · {b.age} · {b.author}{mark}")
+
+    footer = ""
+    if not show_all and total > shown:
+        footer = f"\n  … 외 {total - shown}개. `/branch {project.name} all` 로 전체 보기"
+
+    return header + "\n" + "\n".join(rows) + footer
 
 
 # ---- cleanup (§12 Q15) ----

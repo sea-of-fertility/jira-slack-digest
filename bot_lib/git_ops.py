@@ -1,8 +1,17 @@
 import subprocess
+from dataclasses import dataclass
 
 
 class GitError(Exception):
     """git command exited non-zero. Wraps stderr for the bot to relay."""
+
+
+@dataclass(frozen=True)
+class BranchInfo:
+    name: str
+    age: str        # "3 hours ago", "2 weeks ago" — relative
+    author: str
+    is_current: bool
 
 
 def run_git(repo: str, *args: str) -> str:
@@ -76,3 +85,33 @@ def fetch_and_track(repo: str, name: str, remote: str = "origin") -> None:
 
 def push(repo: str, branch: str, remote: str = "origin") -> None:
     run_git(repo, "push", "-u", remote, branch)
+
+
+def list_local_branches(repo: str, limit: int = 10) -> tuple[list[BranchInfo], int]:
+    """Local branches sorted by most-recent-commit.
+
+    Returns (top-N, total). limit=0 means no truncation. Detached HEAD
+    surfaces as is_current=False on every branch (no GitError raised).
+    """
+    try:
+        cur = current_branch(repo)
+    except GitError:
+        cur = ""
+
+    out = run_git(
+        repo,
+        "for-each-ref",
+        "--sort=-committerdate",
+        "--format=%(refname:short)|%(committerdate:relative)|%(authorname)",
+        "refs/heads/",
+    )
+    rows = []
+    for raw in out.strip().splitlines():
+        parts = raw.split("|", 2)
+        if len(parts) != 3:
+            continue
+        name, age, author = parts
+        rows.append(BranchInfo(name=name, age=age, author=author, is_current=(name == cur)))
+    total = len(rows)
+    head = rows if limit <= 0 else rows[:limit]
+    return head, total

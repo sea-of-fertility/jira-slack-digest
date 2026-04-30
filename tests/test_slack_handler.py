@@ -422,6 +422,130 @@ def test_four_token_ignores_context(tmp_path):
     assert calls[0]["project"].remote == "origin"  # not "999" from context
 
 
+# ---- /branch ----
+
+
+@pytest.fixture
+def branch_repo(tmp_path):
+    """A real git repo with several branches at different timestamps."""
+    r = tmp_path / "repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=r, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@x.com"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=r, check=True)
+    (r / "README.md").write_text("hi")
+    subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=r, check=True, capture_output=True)
+    for n in ("feat/a", "feat/b", "fix/c"):
+        subprocess.run(["git", "checkout", "-b", n], cwd=r, check=True, capture_output=True)
+        (r / f"{n.replace('/', '_')}.txt").write_text("x")
+        subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+        subprocess.run(["git", "commit", "-m", n], cwd=r, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "main"], cwd=r, check=True, capture_output=True)
+    return Project(
+        name="myrepo", path=str(r), default_branch="main", remote="origin",
+        test_cmd=None, test_timeout=10,
+    )
+
+
+def test_branch_explicit_repo_lists_all(branch_repo):
+    deps = _deps(registry={"myrepo": branch_repo})
+    sent, say = _record_say()
+    handle_message(text="/branch myrepo", user_id=ALLOWED, say=say, deps=deps)
+    assert len(sent) == 1
+    msg = sent[0]
+    assert "myrepo" in msg
+    assert "main" in msg and "feat/a" in msg and "fix/c" in msg
+    assert "⭐" in msg  # current branch marked
+
+
+def test_branch_uses_context_repo(tmp_path, branch_repo):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="origin"))
+
+    deps = _deps(registry={"myrepo": branch_repo}, context=store)
+    sent, say = _record_say()
+    handle_message(text="/branch", user_id=ALLOWED, say=say, deps=deps)
+    assert any("myrepo" in m for m in sent)
+    assert any("feat/a" in m for m in sent)
+
+
+def test_branch_no_context_no_arg_returns_error(tmp_path):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))  # empty
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(text="/branch", user_id=ALLOWED, say=say, deps=deps)
+    assert any("컨텍스트 미설정" in m for m in sent)
+
+
+def test_branch_unknown_repo_suggests(branch_repo):
+    deps = _deps(registry={"ceph-api": branch_repo})
+    sent, say = _record_say()
+    handle_message(text="/branch cef-api", user_id=ALLOWED, say=say, deps=deps)
+    assert any("모르는 repo" in m for m in sent)
+
+
+def test_branch_default_limit_is_ten(tmp_path):
+    """Repo with 12 branches: default `/branch` shows 10 + footer."""
+    r = tmp_path / "repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=r, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@x.com"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=r, check=True)
+    (r / "README.md").write_text("hi")
+    subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=r, check=True, capture_output=True)
+    for i in range(11):  # main + 11 = 12 total
+        subprocess.run(["git", "checkout", "main"], cwd=r, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "-b", f"feat/x{i}"], cwd=r, check=True, capture_output=True)
+        (r / f"x{i}.txt").write_text(str(i))
+        subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+        subprocess.run(["git", "commit", "-m", f"x{i}"], cwd=r, check=True, capture_output=True)
+
+    project = Project(
+        name="big", path=str(r), default_branch="main", remote="origin",
+        test_cmd=None, test_timeout=10,
+    )
+    deps = _deps(registry={"big": project})
+    sent, say = _record_say()
+    handle_message(text="/branch big", user_id=ALLOWED, say=say, deps=deps)
+    msg = sent[0]
+    assert "12개 중 최근 10" in msg
+    assert "외 2개" in msg
+
+
+def test_branch_all_shows_full_list(tmp_path):
+    """`/branch <repo> all` shows everything (up to hard cap)."""
+    r = tmp_path / "repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=r, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@x.com"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=r, check=True)
+    (r / "README.md").write_text("hi")
+    subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=r, check=True, capture_output=True)
+    for i in range(11):
+        subprocess.run(["git", "checkout", "main"], cwd=r, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "-b", f"feat/x{i}"], cwd=r, check=True, capture_output=True)
+        (r / f"x{i}.txt").write_text(str(i))
+        subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+        subprocess.run(["git", "commit", "-m", f"x{i}"], cwd=r, check=True, capture_output=True)
+
+    project = Project(
+        name="big", path=str(r), default_branch="main", remote="origin",
+        test_cmd=None, test_timeout=10,
+    )
+    deps = _deps(registry={"big": project})
+    sent, say = _record_say()
+    handle_message(text="/branch big all", user_id=ALLOWED, say=say, deps=deps)
+    msg = sent[0]
+    assert "전체 12" in msg
+    for i in range(11):
+        assert f"feat/x{i}" in msg
+
+
 # ---- mutex (§12 Q8) ----
 
 

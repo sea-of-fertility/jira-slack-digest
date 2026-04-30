@@ -5,6 +5,7 @@ import pytest
 from pathlib import Path
 
 from bot_lib.git_ops import (
+    BranchInfo,
     GitError,
     branch_exists_local,
     branch_exists_remote,
@@ -17,6 +18,7 @@ from bot_lib.git_ops import (
     fetch_and_track,
     head_sha,
     is_clean,
+    list_local_branches,
     push,
     run_git,
 )
@@ -302,3 +304,64 @@ def test_push_unknown_remote_raises(repo):
     _git(repo, "checkout", "-b", "feat")
     with pytest.raises(GitError):
         push(repo, "feat")
+
+
+# ---- list_local_branches ----
+
+
+def _add_branch(repo, name, content="x"):
+    _git(repo, "checkout", "-b", name)
+    (Path(repo) / f"{name.replace('/', '_')}.txt").write_text(content)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", f"add {name}")
+
+
+def test_list_local_branches_returns_branchinfo(repo):
+    _add_branch(repo, "feat/x")
+    branches, total = list_local_branches(repo)
+    assert total == 2  # main + feat/x
+    assert all(isinstance(b, BranchInfo) for b in branches)
+
+
+def test_list_local_branches_marks_current(repo):
+    _add_branch(repo, "feat/y")  # checkout switches HEAD to feat/y
+    branches, _ = list_local_branches(repo)
+    current_marks = {b.name: b.is_current for b in branches}
+    assert current_marks["feat/y"] is True
+    assert current_marks["main"] is False
+
+
+def test_list_local_branches_sorted_by_recency(repo):
+    _add_branch(repo, "old")
+    _git(repo, "checkout", "main")
+    _add_branch(repo, "new")
+    branches, _ = list_local_branches(repo)
+    names = [b.name for b in branches]
+    # "new" was committed most recently
+    assert names.index("new") < names.index("old")
+
+
+def test_list_local_branches_respects_limit(repo):
+    for i in range(5):
+        _git(repo, "checkout", "main")
+        _add_branch(repo, f"feat/x{i}")
+    branches, total = list_local_branches(repo, limit=3)
+    assert len(branches) == 3
+    assert total == 6  # main + 5 feat
+
+
+def test_list_local_branches_limit_zero_returns_all(repo):
+    for i in range(3):
+        _git(repo, "checkout", "main")
+        _add_branch(repo, f"feat/x{i}")
+    branches, total = list_local_branches(repo, limit=0)
+    assert len(branches) == total == 4
+
+
+def test_list_local_branches_carries_author_and_age(repo):
+    _add_branch(repo, "feat/x")
+    branches, _ = list_local_branches(repo)
+    info = next(b for b in branches if b.name == "feat/x")
+    assert info.author == "Test"  # from fixture's git config user.name
+    assert info.age  # non-empty relative date string
+    assert "ago" in info.age or "second" in info.age or "minute" in info.age
