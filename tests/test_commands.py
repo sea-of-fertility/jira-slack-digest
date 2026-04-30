@@ -11,6 +11,62 @@ def test_parse_returns_four_fields():
     assert cmd.instruction == "null check 추가"
 
 
+# ---- 3-token form (uses session context, repo=None) ----
+
+
+def test_parse_three_token_returns_repo_none():
+    cmd = parse("fix/CDS-99/null check 추가")
+    assert cmd.type == "fix"
+    assert cmd.repo is None
+    assert cmd.issue == "CDS-99"
+    assert cmd.instruction == "null check 추가"
+
+
+def test_parse_three_token_preserves_slashes_in_instruction():
+    cmd = parse("fix/CDS-99/path/with/slashes")
+    assert cmd.repo is None
+    assert cmd.issue == "CDS-99"
+    assert cmd.instruction == "path/with/slashes"
+
+
+def test_parse_three_token_multiline():
+    cmd = parse("docs/CDS-1/line1\nline2")
+    assert cmd.repo is None
+    assert "line1" in cmd.instruction and "line2" in cmd.instruction
+
+
+def test_parse_three_token_with_whitespace_around_tokens():
+    cmd = parse(" fix / CDS-99 / x ")
+    assert cmd.repo is None
+    assert cmd.issue == "CDS-99"
+    assert cmd.instruction == "x"
+
+
+def test_parse_three_token_unknown_type_rejected():
+    with pytest.raises(CommandError, match="지원 type"):
+        parse("hotfix/CDS-99/x")
+
+
+def test_parse_three_token_empty_instruction_rejected():
+    with pytest.raises(CommandError, match="instruction"):
+        parse("fix/CDS-99/")
+
+
+# ---- ambiguity: a "repo" that happens to look like an issue regex ----
+# Repo names are kebab-case lowercase by convention; issue regex requires
+# UPPERCASE letters + dash + digits, so they cannot collide. This test
+# documents the behavior on the boundary case.
+
+
+def test_uppercase_in_token2_picks_three_token():
+    """When token-2 matches ^[A-Z]+-\\d+$ the parser treats it as the issue
+    key (3-token form). Repo aliases that violate the issue regex stay in
+    4-token form."""
+    cmd = parse("fix/MYREPO/CDS-99/x")  # MYREPO doesn't match issue regex (no -\d+)
+    assert cmd.repo == "MYREPO"
+    assert cmd.issue == "CDS-99"
+
+
 def test_instruction_preserves_slashes():
     cmd = parse("fix/jira-digest/CDS-99/path/with/slashes")
     assert cmd.instruction == "path/with/slashes"
