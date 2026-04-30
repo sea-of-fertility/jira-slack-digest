@@ -23,10 +23,10 @@ HELP_TEXT = (
     "  init/clear            - 컨텍스트 삭제\n"
     "  status                - 현재 컨텍스트·등록 repo 조회\n\n"
     "조회:\n"
-    "  /branch               - 현재 컨텍스트 repo 의 최근 10개 브랜치\n"
-    "  /branch <repo>        - 명시한 repo 의 최근 10개\n"
-    "  /branch all           - 전체 (최대 50개)\n"
-    "  /branch <repo> all    - 명시 repo 전체\n\n"
+    "  branch                - 현재 컨텍스트 repo 의 최근 10개 브랜치\n"
+    "  branch <repo>         - 명시한 repo 의 최근 10개\n"
+    "  branch all            - 전체 (최대 50개)\n"
+    "  branch <repo> all     - 명시 repo 전체\n\n"
     "기타:\n"
     "  help / 도움말         - 이 안내\n"
     "  cleanup/<repo>        - 워킹 트리 초기화"
@@ -35,7 +35,7 @@ HELP_TEXT = (
 
 CLEANUP_RE = re.compile(r"^cleanup/(\S+)$")
 INIT_RE = re.compile(r"^init/(\S+?)/(\S+)$")
-BRANCH_RE = re.compile(r"^/branch(?:\s+(.+))?$")
+BRANCH_RE = re.compile(r"^branch(?:\s+(.+))?$")
 BRANCH_DEFAULT_LIMIT = 10
 BRANCH_HARD_CAP = 50
 
@@ -226,7 +226,7 @@ def _handle_branch(arg: Optional[str], deps: HandlerDeps, say: Say) -> None:
 
     if repo_name is None:
         say(
-            "❌ 컨텍스트 미설정. `/branch <repo>` 로 명시하거나 `init/<repo>/<remote>` 로 설정하세요.\n"
+            "❌ 컨텍스트 미설정. `branch <repo>` 로 명시하거나 `init/<repo>/<remote>` 로 설정하세요.\n"
             f"등록된 repo: {', '.join(f'`{n}`' for n in sorted(deps.registry)) or '(없음)'}"
         )
         return
@@ -288,7 +288,7 @@ def _format_branch_list(project, branches, total: int, show_all: bool) -> str:
 
     footer = ""
     if not show_all and total > shown:
-        footer = f"\n  … 외 {total - shown}개. `/branch {project.name} all` 로 전체 보기"
+        footer = f"\n  … 외 {total - shown}개. `branch {project.name} all` 로 전체 보기"
 
     return header + "\n" + "\n".join(rows) + footer
 

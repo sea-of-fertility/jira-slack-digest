@@ -422,7 +422,7 @@ def test_four_token_ignores_context(tmp_path):
     assert calls[0]["project"].remote == "origin"  # not "999" from context
 
 
-# ---- /branch ----
+# ---- branch ----
 
 
 @pytest.fixture
@@ -451,7 +451,7 @@ def branch_repo(tmp_path):
 def test_branch_explicit_repo_lists_all(branch_repo):
     deps = _deps(registry={"myrepo": branch_repo})
     sent, say = _record_say()
-    handle_message(text="/branch myrepo", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="branch myrepo", user_id=ALLOWED, say=say, deps=deps)
     assert len(sent) == 1
     msg = sent[0]
     assert "myrepo" in msg
@@ -466,7 +466,7 @@ def test_branch_uses_context_repo(tmp_path, branch_repo):
 
     deps = _deps(registry={"myrepo": branch_repo}, context=store)
     sent, say = _record_say()
-    handle_message(text="/branch", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="branch", user_id=ALLOWED, say=say, deps=deps)
     assert any("myrepo" in m for m in sent)
     assert any("feat/a" in m for m in sent)
 
@@ -476,14 +476,14 @@ def test_branch_no_context_no_arg_returns_error(tmp_path):
     store = ContextStore(str(tmp_path / "ctx.json"))  # empty
     deps = _deps(context=store)
     sent, say = _record_say()
-    handle_message(text="/branch", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="branch", user_id=ALLOWED, say=say, deps=deps)
     assert any("컨텍스트 미설정" in m for m in sent)
 
 
 def test_branch_unknown_repo_suggests(branch_repo):
     deps = _deps(registry={"ceph-api": branch_repo})
     sent, say = _record_say()
-    handle_message(text="/branch cef-api", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="branch cef-api", user_id=ALLOWED, say=say, deps=deps)
     assert any("모르는 repo" in m for m in sent)
 
 
@@ -510,14 +510,14 @@ def test_branch_default_limit_is_ten(tmp_path):
     )
     deps = _deps(registry={"big": project})
     sent, say = _record_say()
-    handle_message(text="/branch big", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="branch big", user_id=ALLOWED, say=say, deps=deps)
     msg = sent[0]
     assert "12개 중 최근 10" in msg
     assert "외 2개" in msg
 
 
 def test_branch_all_shows_full_list(tmp_path):
-    """`/branch <repo> all` shows everything (up to hard cap)."""
+    """`branch <repo> all` shows everything (up to hard cap)."""
     r = tmp_path / "repo"
     r.mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=r, check=True, capture_output=True)
@@ -539,7 +539,7 @@ def test_branch_all_shows_full_list(tmp_path):
     )
     deps = _deps(registry={"big": project})
     sent, say = _record_say()
-    handle_message(text="/branch big all", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="branch big all", user_id=ALLOWED, say=say, deps=deps)
     msg = sent[0]
     assert "전체 12" in msg
     for i in range(11):
