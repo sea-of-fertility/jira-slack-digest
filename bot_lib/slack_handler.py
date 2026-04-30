@@ -22,7 +22,10 @@ HELP_TEXT = (
     "  init/<repo>/<remote>  - 세션 컨텍스트 설정 (이후 3토큰 가능)\n"
     "  init/clear            - 컨텍스트 삭제\n"
     "  status                - 현재 컨텍스트·등록 repo 조회\n\n"
-    "조회:\n"
+    "조회 (read-only, 평문):\n"
+    "  repo                  - 등록된 repo 목록 (경로·기본 branch·remote)\n"
+    "  remote                - 컨텍스트 repo 의 git remote 목록\n"
+    "  remote <repo>         - 명시한 repo 의 remote 목록\n"
     "  branch                - 현재 컨텍스트 repo 의 최근 10개 브랜치\n"
     "  branch <repo>         - 명시한 repo 의 최근 10개\n"
     "  branch all            - 전체 (최대 50개)\n"
@@ -36,6 +39,8 @@ HELP_TEXT = (
 CLEANUP_RE = re.compile(r"^cleanup/(\S+)$")
 INIT_RE = re.compile(r"^init/(\S+?)/(\S+)$")
 BRANCH_RE = re.compile(r"^branch(?:\s+(.+))?$")
+REMOTE_RE = re.compile(r"^remote(?:\s+(\S+))?$")
+REPO_RE = re.compile(r"^repo$")
 BRANCH_DEFAULT_LIMIT = 10
 BRANCH_HARD_CAP = 50
 
@@ -84,7 +89,18 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
         _handle_init(init_match.group(1), init_match.group(2), deps, say)
         return
 
-    # /branch [<repo>] [all]
+    # repo (read-only)
+    if REPO_RE.match(stripped):
+        _handle_repo(deps, say)
+        return
+
+    # remote [<repo>] (read-only)
+    remote_match = REMOTE_RE.match(stripped)
+    if remote_match:
+        _handle_remote(remote_match.group(1), deps, say)
+        return
+
+    # branch [<repo>] [all] (read-only)
     branch_match = BRANCH_RE.match(stripped)
     if branch_match:
         _handle_branch(branch_match.group(1), deps, say)
@@ -217,7 +233,67 @@ def _list_git_remotes(repo_path: str) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
-# ---- /branch ----
+# ---- repo / remote (read-only listings) ----
+
+
+def _handle_repo(deps: HandlerDeps, say: Say) -> None:
+    """List every registered repo with its default branch + remote."""
+    repos = sorted(deps.registry)
+    if not repos:
+        say("등록된 repo 없음. `projects.md` 에 추가 후 봇 재시작.")
+        return
+    ctx = deps.context.get() if deps.context else None
+    cur = ctx.repo if ctx else None
+
+    name_w = max(len(n) for n in repos)
+    lines = [f"등록된 repo ({len(repos)}개):"]
+    for n in repos:
+        p = deps.registry[n]
+        mark = " ⭐" if n == cur else ""
+        lines.append(
+            f"  {n.ljust(name_w)}  · branch: {p.default_branch}  · remote: {p.remote}{mark}"
+        )
+    say("\n".join(lines))
+
+
+def _handle_remote(arg: Optional[str], deps: HandlerDeps, say: Say) -> None:
+    """List git remotes (name + URL) for a repo. Arg or context decides which."""
+    if arg:
+        repo_name = arg
+    else:
+        ctx = deps.context.get() if deps.context else None
+        if ctx is None:
+            say(
+                "❌ 컨텍스트 미설정. `remote <repo>` 로 명시하거나 `init/<repo>/<remote>` 로 설정하세요.\n"
+                f"등록된 repo: {', '.join(f'`{n}`' for n in sorted(deps.registry)) or '(없음)'}"
+            )
+            return
+        repo_name = ctx.repo
+
+    project = deps.registry.get(repo_name)
+    if project is None:
+        say(_unknown_repo_message(repo_name, deps.registry))
+        return
+
+    remotes = git_ops.list_remotes(project.path)
+    if not remotes:
+        say(f"`{project.name}` 에 등록된 git remote 없음.")
+        return
+
+    name_w = max(len(r.name) for r in remotes)
+    cur_remote = project.remote
+    ctx = deps.context.get() if deps.context else None
+    if ctx and ctx.repo == project.name:
+        cur_remote = ctx.remote   # 컨텍스트의 override 가 우선
+
+    lines = [f"`{project.name}` git remotes ({len(remotes)}개, 기본: `{cur_remote}`):"]
+    for r in remotes:
+        mark = " ⭐" if r.name == cur_remote else ""
+        lines.append(f"  {r.name.ljust(name_w)}  · {r.url}{mark}")
+    say("\n".join(lines))
+
+
+# ---- branch (read-only) ----
 
 
 def _handle_branch(arg: Optional[str], deps: HandlerDeps, say: Say) -> None:

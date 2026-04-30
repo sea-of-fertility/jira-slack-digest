@@ -7,6 +7,7 @@ from pathlib import Path
 from bot_lib.git_ops import (
     BranchInfo,
     GitError,
+    RemoteInfo,
     branch_exists_local,
     branch_exists_remote,
     checkout,
@@ -19,6 +20,7 @@ from bot_lib.git_ops import (
     head_sha,
     is_clean,
     list_local_branches,
+    list_remotes,
     push,
     run_git,
 )
@@ -365,3 +367,28 @@ def test_list_local_branches_carries_author_and_age(repo):
     assert info.author == "Test"  # from fixture's git config user.name
     assert info.age  # non-empty relative date string
     assert "ago" in info.age or "second" in info.age or "minute" in info.age
+
+
+# ---- list_remotes ----
+
+
+def test_list_remotes_empty_when_none(repo):
+    assert list_remotes(repo) == []
+
+
+def test_list_remotes_returns_each_unique_name(repo, tmp_path):
+    bare1 = tmp_path / "a.git"
+    bare1.mkdir()
+    _git(bare1, "init", "--bare")
+    bare2 = tmp_path / "b.git"
+    bare2.mkdir()
+    _git(bare2, "init", "--bare")
+    _git(repo, "remote", "add", "305", str(bare1))
+    _git(repo, "remote", "add", "306", str(bare2))
+
+    remotes = list_remotes(repo)
+    by_name = {r.name: r.url for r in remotes}
+    assert set(by_name) == {"305", "306"}
+    assert by_name["305"] == str(bare1)
+    assert by_name["306"] == str(bare2)
+    assert all(isinstance(r, RemoteInfo) for r in remotes)

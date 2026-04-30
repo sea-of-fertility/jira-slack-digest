@@ -14,6 +14,12 @@ class BranchInfo:
     is_current: bool
 
 
+@dataclass(frozen=True)
+class RemoteInfo:
+    name: str
+    url: str
+
+
 def run_git(repo: str, *args: str) -> str:
     proc = subprocess.run(
         ["git", *args],
@@ -85,6 +91,26 @@ def fetch_and_track(repo: str, name: str, remote: str = "origin") -> None:
 
 def push(repo: str, branch: str, remote: str = "origin") -> None:
     run_git(repo, "push", "-u", remote, branch)
+
+
+def list_remotes(repo: str) -> list[RemoteInfo]:
+    """All git remotes for a repo (name + fetch URL, deduped)."""
+    try:
+        out = run_git(repo, "remote", "-v")
+    except GitError:
+        return []
+    seen = set()
+    result: list[RemoteInfo] = []
+    for line in out.strip().splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        name, url = parts[0], parts[1]
+        if name in seen:
+            continue
+        seen.add(name)
+        result.append(RemoteInfo(name=name, url=url))
+    return result
 
 
 def list_local_branches(repo: str, limit: int = 10) -> tuple[list[BranchInfo], int]:

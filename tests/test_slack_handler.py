@@ -59,7 +59,7 @@ def _deps(execute=None, registry=None, context=None):
     from bot_lib.context import ContextStore
     return HandlerDeps(
         allowed_user_id=ALLOWED,
-        registry=registry or {"myrepo": _project()},
+        registry={"myrepo": _project()} if registry is None else registry,
         jira_base_url="https://x.atlassian.net",
         jira_email="me@x.com",
         jira_token="t",
@@ -420,6 +420,105 @@ def test_four_token_ignores_context(tmp_path):
     )
     assert calls[0]["cmd"].repo == "myrepo"
     assert calls[0]["project"].remote == "origin"  # not "999" from context
+
+
+# ---- repo / remote (read-only) ----
+
+
+def test_repo_lists_all_registered():
+    deps = _deps(registry={
+        "alpha": _project("alpha"),
+        "beta": _project("beta"),
+    })
+    sent, say = _record_say()
+    handle_message(text="repo", user_id=ALLOWED, say=say, deps=deps)
+    msg = sent[0]
+    assert "alpha" in msg and "beta" in msg
+    assert "2개" in msg
+
+
+def test_repo_marks_current_context(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="beta", remote="origin"))
+    deps = _deps(
+        registry={"alpha": _project("alpha"), "beta": _project("beta")},
+        context=store,
+    )
+    sent, say = _record_say()
+    handle_message(text="repo", user_id=ALLOWED, say=say, deps=deps)
+    msg = sent[0]
+    beta_line = next(line for line in msg.splitlines() if "beta" in line)
+    alpha_line = next(line for line in msg.splitlines() if "alpha" in line)
+    assert "⭐" in beta_line
+    assert "⭐" not in alpha_line
+
+
+def test_repo_empty_registry():
+    deps = _deps(registry={})
+    sent, say = _record_say()
+    handle_message(text="repo", user_id=ALLOWED, say=say, deps=deps)
+    assert any("등록된 repo 없음" in m for m in sent)
+
+
+def test_remote_explicit_repo_lists_remotes(real_repo):
+    deps = _deps(registry={"ceph-api": real_repo})
+    sent, say = _record_say()
+    handle_message(text="remote ceph-api", user_id=ALLOWED, say=say, deps=deps)
+    msg = sent[0]
+    assert "ceph-api" in msg
+    assert "305" in msg and "306" in msg
+
+
+def test_remote_uses_context_repo(tmp_path, real_repo):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="ceph-api", remote="306"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+    sent, say = _record_say()
+    handle_message(text="remote", user_id=ALLOWED, say=say, deps=deps)
+    msg = sent[0]
+    assert "ceph-api" in msg
+    assert "기본: `306`" in msg
+    line_306 = next(line for line in msg.splitlines() if line.lstrip().startswith("306"))
+    line_305 = next(line for line in msg.splitlines() if line.lstrip().startswith("305"))
+    assert "⭐" in line_306
+    assert "⭐" not in line_305
+
+
+def test_remote_no_context_no_arg_returns_error(tmp_path):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(text="remote", user_id=ALLOWED, say=say, deps=deps)
+    assert any("컨텍스트 미설정" in m for m in sent)
+
+
+def test_remote_unknown_repo_suggests(real_repo):
+    deps = _deps(registry={"ceph-api": real_repo})
+    sent, say = _record_say()
+    handle_message(text="remote cef-api", user_id=ALLOWED, say=say, deps=deps)
+    assert any("모르는 repo" in m for m in sent)
+
+
+def test_remote_repo_without_remotes(tmp_path):
+    r = tmp_path / "lonely"
+    r.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=r, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@x.com"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=r, check=True)
+    (r / "x").write_text("x")
+    subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=r, check=True, capture_output=True)
+    project = Project(
+        name="lonely", path=str(r), default_branch="main", remote="origin",
+        test_cmd=None, test_timeout=10,
+    )
+    deps = _deps(registry={"lonely": project})
+    sent, say = _record_say()
+    handle_message(text="remote lonely", user_id=ALLOWED, say=say, deps=deps)
+    assert any("등록된 git remote 없음" in m for m in sent)
 
 
 # ---- branch ----
