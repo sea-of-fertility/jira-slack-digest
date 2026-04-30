@@ -5,6 +5,10 @@
 한 행을 임시로 비활성화하려면 `이름` 컬럼 맨 앞에 `#` 를 붙인다.
 `테스트 명령` 이 `-` 또는 빈 칸이면 해당 repo는 테스트 단계를 스킵한다.
 
+봇 자신의 repo (`/Users/hyungjunpark/dev/jira-slack-digest`) 는 등록해도
+orchestrator의 self-repo 가드에 의해 거부된다 — 자기 자신을 수정하면
+브랜치 스위치로 봇 소스가 working tree에서 사라져 launchd 재시작이 깨짐.
+
 | 이름 | 경로 | 기본 브랜치 | 테스트 명령 | 테스트 타임아웃(초) |
 |---|---|---|---|---|
-| jira-digest | /Users/hyungjunpark/dev/jira-slack-digest | main | .venv/bin/pytest -q | 120 |
+| ceph-api | /Users/hyungjunpark/IdeaProjects/ceph-service-api | dev | ./gradlew test --no-daemon | 600 |

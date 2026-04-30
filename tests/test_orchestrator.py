@@ -138,6 +138,44 @@ def test_happy_path_complete(project_with_remote, monkeypatch):
     assert any("push" in m for m in progress_log)
 
 
+# ---- self-repo guard ----
+
+
+def test_self_repo_is_refused():
+    """Job pointed at the bot's own dir → BLOCKED, no execution."""
+    from bot_lib.orchestrator import BLOCKED, _BOT_DIR
+
+    self_project = Project(
+        name="self",
+        path=str(_BOT_DIR),
+        default_branch="main",
+        test_cmd=None,
+        test_timeout=10,
+    )
+    cmd = ParsedCmd(type="fix", repo="self", issue="CDS-1", instruction="x")
+    out = execute_job(
+        cmd, self_project, jira_base_url="u", jira_email="e", jira_token="t"
+    )
+    assert out.status == BLOCKED
+    assert "self-modification" in out.message or "자기 자신" in out.message
+
+
+def test_self_repo_check_resolves_symlinks(tmp_path):
+    from bot_lib.orchestrator import BLOCKED, _BOT_DIR
+
+    link = tmp_path / "linked"
+    link.symlink_to(_BOT_DIR)
+    project = Project(
+        name="alias", path=str(link), default_branch="main",
+        test_cmd=None, test_timeout=10,
+    )
+    cmd = ParsedCmd(type="fix", repo="alias", issue="CDS-1", instruction="x")
+    out = execute_job(
+        cmd, project, jira_base_url="u", jira_email="e", jira_token="t"
+    )
+    assert out.status == BLOCKED
+
+
 # ---- cycle (b): retry loop ----
 
 

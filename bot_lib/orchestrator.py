@@ -1,6 +1,7 @@
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 from bot_lib import claude_runner, git_ops, jira_client, test_runner
@@ -13,6 +14,14 @@ FAILED = "failed"
 
 MAX_ATTEMPTS = 3
 JOB_CAP_SECONDS = 30 * 60  # §12 Q11d
+
+# Where bot.py / bot_lib live. Used to refuse self-modification — branching
+# off main would yank these files out of the working tree mid-run.
+_BOT_DIR = Path(__file__).resolve().parent.parent
+
+
+def _is_self_repo(project_path: str) -> bool:
+    return Path(project_path).resolve() == _BOT_DIR
 
 
 @dataclass(frozen=True)
@@ -50,6 +59,15 @@ def execute_job(
     start = time.monotonic()
     deadline = start + job_cap_seconds
     branch = f"{cmd.type}/{cmd.issue}"
+
+    # Refuse self-modification. Branching off main here would swap our own
+    # source out of the working tree, breaking launchd restarts and leaving
+    # claude with an empty repo to edit.
+    if _is_self_repo(project.path):
+        return _blocked(
+            branch,
+            "봇이 자기 자신의 repo는 수정하지 않습니다 (self-modification disabled).",
+        )
 
     # §7 step 6
     if not git_ops.is_clean(project.path):
