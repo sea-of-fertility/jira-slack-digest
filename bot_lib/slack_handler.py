@@ -1,8 +1,10 @@
 import difflib
-from dataclasses import dataclass
-from typing import Callable, Mapping, Optional
+import re
+from dataclasses import dataclass, field
+from typing import Callable, Mapping
 
-from bot_lib import commands, orchestrator
+from bot_lib import commands, git_ops, orchestrator
+from bot_lib.mutex import RepoMutex
 from bot_lib.registry import Project
 
 
@@ -13,14 +15,18 @@ HELP_TEXT = (
     "issue: PROJ-123 형식\n"
     "instruction: 자유 텍스트\n\n"
     "예: fix/ceph-api/CDS-99/null check 추가\n"
-    "도움말: `help` 또는 `도움말`"
+    "도움말: `help` 또는 `도움말`\n"
+    "복구: `cleanup/<repo>` (워킹 트리 초기화)"
 )
+
+
+CLEANUP_RE = re.compile(r"^cleanup/(\S+)$")
 
 
 Say = Callable[[str], None]
 
 
-@dataclass(frozen=True)
+@dataclass
 class HandlerDeps:
     allowed_user_id: str
     registry: Mapping[str, Project]
@@ -28,6 +34,7 @@ class HandlerDeps:
     jira_email: str
     jira_token: str
     execute: Callable[..., orchestrator.JobOutcome] = orchestrator.execute_job
+    mutex: RepoMutex = field(default_factory=RepoMutex)
 
 
 def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> None:
@@ -36,9 +43,15 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
     if user_id != deps.allowed_user_id:
         return
 
-    # §6 도움말 트리거
+    # §6 도움말
     if commands.is_help(text):
         say(HELP_TEXT)
+        return
+
+    # §12 Q15 — cleanup/<repo>
+    cleanup_repo = _match_cleanup(text)
+    if cleanup_repo is not None:
+        _handle_cleanup(cleanup_repo, deps, say)
         return
 
     # §6 명령 파싱
@@ -48,25 +61,71 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
         say(f"❌ {e}")
         return
 
-    # repo 등록 검증 (§6 검증 표 마지막 행)
     project = deps.registry.get(cmd.repo)
     if project is None:
         say(_unknown_repo_message(cmd.repo, deps.registry))
         return
 
-    # Invariant 4 — progress relay only
-    say(f"⏳ {cmd.type}/{cmd.issue} 시작합니다.")
+    _run_with_mutex(cmd, project, deps, say)
 
-    outcome = deps.execute(
-        cmd,
-        project,
-        jira_base_url=deps.jira_base_url,
-        jira_email=deps.jira_email,
-        jira_token=deps.jira_token,
-        progress=say,
-    )
 
-    say(format_outcome(outcome))
+# ---- mutex-guarded execute (§12 Q8) ----
+
+
+def _run_with_mutex(cmd, project: Project, deps: HandlerDeps, say: Say) -> None:
+    lock = deps.mutex.lock_for(project.name)
+    if not lock.acquire(blocking=False):
+        say(f"⏳ `{project.name}` 작업 중. 순서대로 처리되니 대기해 주세요.")
+        lock.acquire()  # block until our turn
+
+    try:
+        say(f"⏳ {cmd.type}/{cmd.issue} 시작합니다.")
+        outcome = deps.execute(
+            cmd,
+            project,
+            jira_base_url=deps.jira_base_url,
+            jira_email=deps.jira_email,
+            jira_token=deps.jira_token,
+            progress=say,
+        )
+        say(format_outcome(outcome))
+    finally:
+        lock.release()
+
+
+# ---- cleanup (§12 Q15) ----
+
+
+def _match_cleanup(text: str) -> str | None:
+    m = CLEANUP_RE.match(text.strip())
+    return m.group(1) if m else None
+
+
+def _handle_cleanup(repo_name: str, deps: HandlerDeps, say: Say) -> None:
+    project = deps.registry.get(repo_name)
+    if project is None:
+        say(_unknown_repo_message(repo_name, deps.registry))
+        return
+
+    lock = deps.mutex.lock_for(project.name)
+    if not lock.acquire(blocking=False):
+        say(f"⏳ `{project.name}` 작업 중. cleanup은 끝난 뒤에 실행됩니다.")
+        lock.acquire()
+
+    try:
+        say(f"🧹 `{project.name}` 워킹 트리 초기화 중...")
+        try:
+            git_ops.run_git(project.path, "reset", "--hard", "HEAD")
+            git_ops.run_git(project.path, "clean", "-fd")
+            sha = git_ops.head_sha(project.path)
+            say(f"✅ 초기화 완료. HEAD: `{sha[:10]}`")
+        except git_ops.GitError as e:
+            say(f"❌ cleanup 실패: {e}")
+    finally:
+        lock.release()
+
+
+# ---- formatting ----
 
 
 def _unknown_repo_message(repo: str, registry: Mapping[str, Project]) -> str:
@@ -100,7 +159,6 @@ def format_outcome(outcome: orchestrator.JobOutcome) -> str:
     if outcome.status == orchestrator.BLOCKED:
         return f"⛔ 차단됨 — `{outcome.branch}`\n{outcome.message}"
 
-    # FAILED
     lines = [f"❌ 실패 — `{outcome.branch}`", outcome.message]
     if outcome.test_status:
         lines.append(f"테스트: {outcome.test_status.upper()}")
