@@ -55,7 +55,8 @@ def _stub_execute(outcome=None):
     return calls, fake
 
 
-def _deps(execute=None, registry=None):
+def _deps(execute=None, registry=None, context=None):
+    from bot_lib.context import ContextStore
     return HandlerDeps(
         allowed_user_id=ALLOWED,
         registry=registry or {"myrepo": _project()},
@@ -63,6 +64,7 @@ def _deps(execute=None, registry=None):
         jira_email="me@x.com",
         jira_token="t",
         execute=execute or (lambda *a, **kw: None),
+        context=context,
     )
 
 
@@ -267,6 +269,157 @@ def test_format_includes_usage_on_failed_outcome():
     msg = format_outcome(out)
     assert "in=5,000" in msg
     assert "$0.0250" in msg
+
+
+# ---- init / status / clear (§B) ----
+
+
+@pytest.fixture
+def real_repo(tmp_path):
+    """A real git repo with two named remotes (305, 306). Returned as a Project."""
+    r = tmp_path / "repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=r, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@x.com"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=r, check=True)
+    (r / "README.md").write_text("hi")
+    subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=r, check=True, capture_output=True)
+    # Bare remotes named like real GitLab: 305, 306
+    for name in ("305", "306"):
+        bare = tmp_path / f"{name}.git"
+        bare.mkdir()
+        subprocess.run(["git", "init", "--bare", "-b", "main"], cwd=bare, check=True, capture_output=True)
+        subprocess.run(["git", "remote", "add", name, str(bare)], cwd=r, check=True)
+    return Project(
+        name="ceph-api", path=str(r), default_branch="main", remote="305",
+        test_cmd=None, test_timeout=10,
+    )
+
+
+def test_init_sets_context_when_remote_valid(tmp_path, real_repo):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+
+    sent, say = _record_say()
+    handle_message(text="init/ceph-api/306", user_id=ALLOWED, say=say, deps=deps)
+
+    assert any("컨텍스트 설정" in m for m in sent)
+    ctx = store.get()
+    assert ctx is not None
+    assert ctx.repo == "ceph-api"
+    assert ctx.remote == "306"
+
+
+def test_init_rejects_unknown_remote(tmp_path, real_repo):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+
+    sent, say = _record_say()
+    handle_message(text="init/ceph-api/999", user_id=ALLOWED, say=say, deps=deps)
+
+    assert any("remote `999` 없음" in m for m in sent)
+    assert any("305" in m and "306" in m for m in sent)
+    assert store.get() is None
+
+
+def test_init_rejects_unknown_repo(tmp_path, real_repo):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+
+    sent, say = _record_say()
+    handle_message(text="init/typo-api/305", user_id=ALLOWED, say=say, deps=deps)
+
+    assert any("모르는 repo" in m for m in sent)
+    assert store.get() is None
+
+
+def test_init_clear_removes_context(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="origin"))
+
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(text="init/clear", user_id=ALLOWED, say=say, deps=deps)
+
+    assert any("삭제" in m for m in sent)
+    assert store.get() is None
+
+
+def test_status_no_context(tmp_path):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(text="status", user_id=ALLOWED, say=say, deps=deps)
+    assert any("없음" in m for m in sent)
+    assert any("myrepo" in m for m in sent)
+
+
+def test_status_with_context(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="305"))
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(text="status", user_id=ALLOWED, say=say, deps=deps)
+    assert any("`myrepo`" in m and "`305`" in m for m in sent)
+
+
+# ---- 3-token routing ----
+
+
+def test_three_token_uses_context_repo(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="305"))
+
+    calls, fake = _stub_execute()
+    deps = _deps(execute=fake, context=store)
+
+    sent, say = _record_say()
+    handle_message(
+        text="fix/CDS-99/null check",
+        user_id=ALLOWED, say=say, deps=deps,
+    )
+    assert len(calls) == 1
+    assert calls[0]["cmd"].repo == "myrepo"   # filled from context
+    assert calls[0]["project"].remote == "305"  # context override applied
+
+
+def test_three_token_without_context_returns_error(tmp_path):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))  # empty
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(
+        text="fix/CDS-99/x", user_id=ALLOWED, say=say, deps=deps
+    )
+    assert any("컨텍스트 미설정" in m for m in sent)
+
+
+def test_four_token_ignores_context(tmp_path):
+    """Explicit 4-token bypasses context — uses projects.md remote."""
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="alpha", remote="999"))  # context says alpha/999
+
+    calls, fake = _stub_execute()
+    deps = _deps(
+        execute=fake,
+        registry={"myrepo": _project()},  # myrepo.remote = origin (default)
+        context=store,
+    )
+    sent, say = _record_say()
+    handle_message(
+        text="fix/myrepo/CDS-1/x", user_id=ALLOWED, say=say, deps=deps
+    )
+    assert calls[0]["cmd"].repo == "myrepo"
+    assert calls[0]["project"].remote == "origin"  # not "999" from context
 
 
 # ---- mutex (§12 Q8) ----
