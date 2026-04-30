@@ -529,6 +529,65 @@ def test_run_who_none_when_neither_set(tmp_path):
     assert calls[0].get("who") is None
 
 
+# ---- cancel ----
+
+
+def test_cancel_no_running_job_reports_clean(tmp_path):
+    from bot_lib.cancellation import CancellationRegistry
+    cancel_reg = CancellationRegistry()
+    deps = _deps()
+    deps.cancel_registry = cancel_reg
+    sent, say = _record_say()
+    handle_message(text="cancel myrepo", user_id=ALLOWED, say=say, deps=deps)
+    assert any("진행 중인 claude 작업 없음" in m for m in sent)
+
+
+def test_cancel_unknown_repo_suggests():
+    from bot_lib.cancellation import CancellationRegistry
+    deps = _deps(registry={"ceph-api": _project("ceph-api")})
+    deps.cancel_registry = CancellationRegistry()
+    sent, say = _record_say()
+    handle_message(text="cancel cef-api", user_id=ALLOWED, say=say, deps=deps)
+    assert any("모르는 repo" in m for m in sent)
+
+
+def test_cancel_sigterms_registered_pid():
+    """cancel <repo> looks up the registered PID and triggers killpg."""
+    from bot_lib.cancellation import CancellationRegistry
+    cancel_reg = CancellationRegistry()
+    cancel_reg.register("myrepo", 99887)
+
+    killed = []
+    real_killpg = __import__("os").killpg
+
+    def fake_killpg(pid, sig):
+        killed.append((pid, sig))
+
+    import bot_lib.cancellation as can_mod
+    deps = _deps()
+    deps.cancel_registry = cancel_reg
+
+    import os as os_mod
+    saved = os_mod.killpg
+    os_mod.killpg = fake_killpg
+    try:
+        sent, say = _record_say()
+        handle_message(text="cancel myrepo", user_id=ALLOWED, say=say, deps=deps)
+    finally:
+        os_mod.killpg = saved
+
+    assert killed and killed[0][0] == 99887
+    assert any("99887" in m and "SIGTERM" in m for m in sent)
+
+
+def test_cancel_no_registry_reports_misconfig():
+    deps = _deps()
+    # cancel_registry left None
+    sent, say = _record_say()
+    handle_message(text="cancel myrepo", user_id=ALLOWED, say=say, deps=deps)
+    assert any("cancel registry 미설정" in m for m in sent)
+
+
 # ---- find ----
 
 

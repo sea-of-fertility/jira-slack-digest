@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from bot_lib import claude_runner, git_ops, jira_client, test_runner
+from bot_lib.cancellation import CancellationRegistry
 from bot_lib.claude_runner import TokenUsage
 from bot_lib.commands import ParsedCmd
 from bot_lib.registry import Project
@@ -51,6 +52,7 @@ def execute_job(
     progress: Optional[Progress] = None,
     job_cap_seconds: int = JOB_CAP_SECONDS,
     who: Optional[str] = None,
+    cancel_registry: Optional[CancellationRegistry] = None,
 ) -> JobOutcome:
     """Run a single Slack-triggered job end-to-end (plan.md §7).
 
@@ -85,7 +87,7 @@ def execute_job(
 
     # §7 step 8 + 10 + 11 — claude + tests with retry
     initial_prompt = _build_prompt(cmd, issue)
-    loop_result = _run_with_retry(project, initial_prompt, deadline, say)
+    loop_result = _run_with_retry(project, initial_prompt, deadline, say, cancel_registry)
 
     if loop_result.aborted_message is not None:
         # claude itself failed, or cap reached, or no incremental edit
@@ -173,6 +175,7 @@ def _run_with_retry(
     initial_prompt: str,
     deadline: float,
     say: Progress,
+    cancel_registry: Optional[CancellationRegistry] = None,
 ) -> _LoopResult:
     """Drive the §7 step 11 loop. SKIP and PASS exit cleanly; FAIL/TIMEOUT
     feeds the failure back to claude up to MAX_ATTEMPTS.
@@ -198,7 +201,9 @@ def _run_with_retry(
         attempts = n
         prompt = initial_prompt if n == 1 else _retry_prompt(last_test)
         say(f"attempt {n}/{MAX_ATTEMPTS}: claude 호출")
-        run = _call_claude_with_fallback(project.path, prompt, session_id, say)
+        run = _call_claude_with_fallback(
+            project.path, prompt, session_id, say, cancel_registry, project.name,
+        )
         usage = usage + run.usage
         if run.returncode != 0:
             return _LoopResult(
@@ -243,19 +248,32 @@ def _run_with_retry(
 
 
 def _call_claude_with_fallback(
-    repo: str, prompt: str, session_id: Optional[str], say: Progress
+    repo: str, prompt: str, session_id: Optional[str], say: Progress,
+    cancel_registry: Optional[CancellationRegistry], repo_name: str,
 ) -> claude_runner.ClaudeRun:
     """§12 Q11c — try --resume first when a session_id exists; on any failure
-    (CLI raises or non-zero exit) fall back to a stateless call."""
+    (CLI raises or non-zero exit) fall back to a stateless call. PID is
+    registered in `cancel_registry` so the Slack `cancel <repo>` command
+    can SIGTERM the running claude."""
+    on_start = (
+        (lambda pid: cancel_registry.register(repo_name, pid))
+        if cancel_registry else None
+    )
+    on_end = (
+        (lambda: cancel_registry.unregister(repo_name))
+        if cancel_registry else None
+    )
     if session_id:
         try:
-            run = claude_runner.run_claude(repo, prompt, resume=session_id)
+            run = claude_runner.run_claude(
+                repo, prompt, resume=session_id, on_start=on_start, on_end=on_end,
+            )
             if run.returncode == 0:
                 return run
             say(f"--resume 실패 (rc={run.returncode}), stateless 폴백")
         except claude_runner.ClaudeError as e:
             say(f"--resume 예외 ({e}), stateless 폴백")
-    return claude_runner.run_claude(repo, prompt)
+    return claude_runner.run_claude(repo, prompt, on_start=on_start, on_end=on_end)
 
 
 def _retry_prompt(last: Optional[test_runner.RunResult]) -> str:

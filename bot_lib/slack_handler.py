@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Mapping, Optional
 
 from bot_lib import commands, git_ops, orchestrator
+from bot_lib.cancellation import CancellationRegistry
 from bot_lib.context import Context, ContextStore
 from bot_lib.mutex import RepoMutex
 from bot_lib.registry import Project
@@ -26,7 +27,8 @@ HELP_TEXT = (
     "  init <repo> -b <branch>           - + branch override\n"
     "  init <repo> -r <remote> -b <branch>\n"
     "  clear                             - 컨텍스트 삭제\n"
-    "  cleanup <repo>                    - 워킹 트리 초기화\n\n"
+    "  cleanup <repo>                    - 워킹 트리 초기화\n"
+    "  cancel <repo>                     - 진행 중인 claude SIGTERM\n\n"
     "조회 (평문):\n"
     "  repo                       - 등록된 repo 목록\n"
     "  remote [<repo>]            - git remote 목록\n"
@@ -45,6 +47,7 @@ HELP_TEXT = (
 
 
 CLEANUP_RE = re.compile(r"^cleanup\s+(\S+)$")
+CANCEL_RE = re.compile(r"^cancel\s+(\S+)$")
 BRANCH_RE = re.compile(r"^branch(?:\s+(.+))?$")
 REMOTE_RE = re.compile(r"^remote(?:\s+(\S+))?$")
 REPO_RE = re.compile(r"^repo$")
@@ -70,6 +73,7 @@ class HandlerDeps:
     mutex: RepoMutex = field(default_factory=RepoMutex)
     context: Optional[ContextStore] = None
     env_bot_user: Optional[str] = None   # fallback when context.who is None
+    cancel_registry: Optional[CancellationRegistry] = None
 
 
 def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> None:
@@ -129,7 +133,13 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
         _handle_branch(branch_match.group(1), deps, say)
         return
 
-    # §12 Q15 — cleanup/<repo>
+    # cancel <repo> — SIGTERM the running claude (§12 Q7 reopened)
+    cancel_match = CANCEL_RE.match(stripped)
+    if cancel_match:
+        _handle_cancel(cancel_match.group(1), deps, say)
+        return
+
+    # §12 Q15 — cleanup <repo>
     cleanup_repo = _match_cleanup(text)
     if cleanup_repo is not None:
         _handle_cleanup(cleanup_repo, deps, say)
@@ -194,6 +204,7 @@ def _run_with_mutex(cmd, project: Project, deps: HandlerDeps, say: Say, *, who: 
             jira_email=deps.jira_email,
             jira_token=deps.jira_token,
             progress=say,
+            cancel_registry=deps.cancel_registry,
         )
         say(format_outcome(outcome))
     finally:
@@ -625,6 +636,31 @@ def _format_branch_list(project, branches, total: int, show_all: bool) -> str:
         footer = f"\n  … 외 {total - shown}개. `branch {project.name} all` 로 전체 보기"
 
     return header + "\n" + "\n".join(rows) + footer
+
+
+# ---- cancel ----
+
+
+def _handle_cancel(repo_name: str, deps: HandlerDeps, say: Say) -> None:
+    project = deps.registry.get(repo_name)
+    if project is None:
+        say(_unknown_repo_message(repo_name, deps.registry))
+        return
+
+    if deps.cancel_registry is None:
+        say("⚠️ cancel registry 미설정 — 봇 설정 확인 필요.")
+        return
+
+    killed_pid = deps.cancel_registry.cancel(project.name)
+    if killed_pid is None:
+        say(f"`{project.name}` 에 진행 중인 claude 작업 없음.")
+        return
+
+    say(
+        f"🛑 `{project.name}` claude (pid={killed_pid}) SIGTERM 전송.\n"
+        f"  잠시 뒤 ❌ 실패 회신 도착 + working tree 부분 편집 가능 →\n"
+        f"  필요 시 `cleanup {project.name}` 로 정리"
+    )
 
 
 # ---- cleanup (§12 Q15) ----

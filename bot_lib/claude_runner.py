@@ -1,7 +1,7 @@
 import json
 import subprocess
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 DEFAULT_DISALLOWED = ("Bash", "WebFetch", "WebSearch")
 DEFAULT_MODEL = "sonnet"
@@ -82,11 +82,19 @@ def run_claude(
     resume: Optional[str] = None,
     model: str = DEFAULT_MODEL,
     disallowed_tools: Sequence[str] = DEFAULT_DISALLOWED,
+    on_start: Optional[Callable[[int], None]] = None,
+    on_end: Optional[Callable[[], None]] = None,
 ) -> ClaudeRun:
     """Invoke `claude -p` with the bot's standard guardrails (plan.md §10-3).
 
-    Returns a ClaudeRun. Use ClaudeRun.session_id to feed --resume on retry
-    (§12 Q11c — caller falls back to stateless if resume fails).
+    `on_start(pid)` fires after the subprocess is spawned; `on_end()` fires
+    in `finally` after it terminates. The orchestrator uses these to plug
+    the PID into CancellationRegistry so a Slack `cancel <repo>` can
+    SIGTERM the running claude.
+
+    `start_new_session=True` makes the spawned claude its own session
+    leader, so a SIGTERM via `os.killpg(pid, ...)` reaches the whole
+    process group — insurance against claude having children.
     """
     cmd = [
         "claude",
@@ -101,23 +109,39 @@ def run_claude(
     cmd.append(prompt)
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             cwd=cwd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired as e:
-        raise ClaudeError(f"claude timeout after {timeout}s") from e
     except FileNotFoundError as e:
         raise ClaudeError("claude CLI not found on PATH") from e
 
+    if on_start:
+        on_start(proc.pid)
+
+    try:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            proc.kill()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            raise ClaudeError(f"claude timeout after {timeout}s") from e
+    finally:
+        if on_end:
+            on_end()
+
     raw_json: Optional[dict] = None
-    result = proc.stdout
+    result = stdout or ""
     session_id: Optional[str] = None
     usage = TokenUsage()
-    stripped = proc.stdout.strip()
+    stripped = (stdout or "").strip()
     if stripped:
         try:
             data = json.loads(stripped)
@@ -125,13 +149,13 @@ def run_claude(
             data = None
         if isinstance(data, dict):
             raw_json = data
-            result = data.get("result", proc.stdout)
+            result = data.get("result", stdout)
             session_id = data.get("session_id")
             usage = _parse_usage(data)
 
     return ClaudeRun(
-        stdout=proc.stdout,
-        stderr=proc.stderr,
+        stdout=stdout or "",
+        stderr=stderr or "",
         returncode=proc.returncode,
         result=result,
         session_id=session_id,

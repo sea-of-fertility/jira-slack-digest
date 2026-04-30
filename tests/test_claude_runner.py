@@ -12,19 +12,58 @@ class _FakeProc:
     stdout: str = ""
     stderr: str = ""
     returncode: int = 0
+    pid: int = 12345
 
 
-def _install_fake_run(monkeypatch, *, captured: dict, proc: _FakeProc, raise_exc=None):
-    def fake_run(cmd, **kwargs):
+class _FakePopen:
+    """Mock for subprocess.Popen that satisfies claude_runner's interface."""
+
+    def __init__(self, cmd, **kwargs):
+        self.cmd = cmd
+        self.kwargs = kwargs
+        self._proc = _FakeProc()
+        self._raise_on_communicate = None
+
+    def configure(self, proc: _FakeProc, raise_on_communicate=None):
+        self._proc = proc
+        self._raise_on_communicate = raise_on_communicate
+
+    @property
+    def pid(self) -> int:
+        return self._proc.pid
+
+    @property
+    def returncode(self) -> int:
+        return self._proc.returncode
+
+    def communicate(self, timeout=None):
+        if self._raise_on_communicate is not None:
+            raise self._raise_on_communicate
+        return self._proc.stdout, self._proc.stderr
+
+    def kill(self):
+        pass
+
+
+def _install_fake_run(monkeypatch, *, captured: dict, proc: _FakeProc, raise_exc=None,
+                     raise_on_communicate=None):
+    """Install a fake subprocess.Popen. raise_exc fires at construction
+    (FileNotFoundError); raise_on_communicate fires when communicate()
+    is called (TimeoutExpired)."""
+    fake_popen_holder = {}
+
+    def fake_popen(cmd, **kwargs):
         captured["cmd"] = cmd
         captured["kwargs"] = kwargs
         if raise_exc is not None:
             raise raise_exc
-        return subprocess.CompletedProcess(
-            args=cmd, returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr
-        )
+        p = _FakePopen(cmd, **kwargs)
+        p.configure(proc, raise_on_communicate=raise_on_communicate)
+        fake_popen_holder["proc"] = p
+        return p
 
-    monkeypatch.setattr("bot_lib.claude_runner.subprocess.run", fake_run)
+    monkeypatch.setattr("bot_lib.claude_runner.subprocess.Popen", fake_popen)
+    return fake_popen_holder
 
 
 def _ok_json(result="done", session_id="s-123"):
@@ -74,18 +113,23 @@ def test_runs_in_given_cwd(monkeypatch, tmp_path):
     assert captured["kwargs"]["cwd"] == str(tmp_path)
 
 
-def test_passes_timeout(monkeypatch, tmp_path):
-    captured = {}
-    _install_fake_run(monkeypatch, captured=captured, proc=_FakeProc(stdout=_ok_json()))
-    run_claude(str(tmp_path), "x", timeout=42)
-    assert captured["kwargs"]["timeout"] == 42
-
-
-def test_default_timeout_is_600(monkeypatch, tmp_path):
+def test_uses_start_new_session_for_process_group(monkeypatch, tmp_path):
+    """Popen must spawn claude in its own session so SIGTERM-via-killpg works."""
     captured = {}
     _install_fake_run(monkeypatch, captured=captured, proc=_FakeProc(stdout=_ok_json()))
     run_claude(str(tmp_path), "x")
-    assert captured["kwargs"]["timeout"] == 600
+    assert captured["kwargs"].get("start_new_session") is True
+
+
+def test_timeout_kwarg_reaches_communicate(monkeypatch, tmp_path):
+    """The timeout kwarg controls communicate() — verify by triggering one."""
+    captured = {}
+    _install_fake_run(
+        monkeypatch, captured=captured, proc=_FakeProc(),
+        raise_on_communicate=subprocess.TimeoutExpired(cmd=["claude"], timeout=42),
+    )
+    with pytest.raises(ClaudeError, match="42"):
+        run_claude(str(tmp_path), "x", timeout=42)
 
 
 # ---- JSON output parsing ----
@@ -136,15 +180,46 @@ def test_no_resume_flag_when_session_omitted(monkeypatch, tmp_path):
 
 
 def test_timeout_raises_claude_error(monkeypatch, tmp_path):
+    """TimeoutExpired in communicate() → ClaudeError, with subprocess killed."""
     captured = {}
     _install_fake_run(
         monkeypatch,
         captured=captured,
         proc=_FakeProc(),
-        raise_exc=subprocess.TimeoutExpired(cmd=["claude"], timeout=600),
+        raise_on_communicate=subprocess.TimeoutExpired(cmd=["claude"], timeout=600),
     )
     with pytest.raises(ClaudeError, match="timeout"):
         run_claude(str(tmp_path), "x")
+
+
+def test_on_start_called_with_pid(monkeypatch, tmp_path):
+    captured = {}
+    _install_fake_run(monkeypatch, captured=captured, proc=_FakeProc(stdout=_ok_json(), pid=99887))
+    received = []
+    run_claude(str(tmp_path), "x", on_start=lambda pid: received.append(pid))
+    assert received == [99887]
+
+
+def test_on_end_called_after_completion(monkeypatch, tmp_path):
+    captured = {}
+    _install_fake_run(monkeypatch, captured=captured, proc=_FakeProc(stdout=_ok_json()))
+    end_calls = []
+    run_claude(str(tmp_path), "x", on_end=lambda: end_calls.append(True))
+    assert end_calls == [True]
+
+
+def test_on_end_called_even_on_timeout(monkeypatch, tmp_path):
+    """Cleanup hook must fire so CancellationRegistry can unregister even
+    when claude is timed out."""
+    captured = {}
+    _install_fake_run(
+        monkeypatch, captured=captured, proc=_FakeProc(),
+        raise_on_communicate=subprocess.TimeoutExpired(cmd=["claude"], timeout=1),
+    )
+    end_calls = []
+    with pytest.raises(ClaudeError):
+        run_claude(str(tmp_path), "x", on_end=lambda: end_calls.append(True))
+    assert end_calls == [True]
 
 
 def test_missing_cli_raises_claude_error(monkeypatch, tmp_path):

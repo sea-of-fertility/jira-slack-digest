@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+from bot_lib.cancellation import CancellationRegistry
 from bot_lib.context import ContextStore
 from bot_lib.registry import RegistryError, load_registry
 from bot_lib.slack_handler import HandlerDeps, handle_message
@@ -44,6 +45,7 @@ def main() -> None:
     context = ContextStore(str(CONTEXT_PATH))
 
     env_bot_user = os.environ.get("BOT_USER") or None  # optional
+    cancel_registry = CancellationRegistry()
 
     deps = HandlerDeps(
         allowed_user_id=_require("SLACK_USER_ID"),
@@ -53,6 +55,7 @@ def main() -> None:
         jira_token=_require("JIRA_API_TOKEN"),
         context=context,
         env_bot_user=env_bot_user,
+        cancel_registry=cancel_registry,
     )
 
     app = App(token=_require("SLACK_BOT_TOKEN"))
