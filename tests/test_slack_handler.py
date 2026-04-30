@@ -23,7 +23,7 @@ ALLOWED = "U0AUQ2VTVQE"
 
 def _project(name="myrepo", path="/tmp/myrepo"):
     return Project(
-        name=name, path=path, default_branch="main",
+        name=name, path=path, default_branch="main", remote="origin",
         test_cmd=None, test_timeout=60,
     )
 
@@ -379,7 +379,7 @@ def repo_dirty(tmp_path):
 
 def test_cleanup_resets_working_tree(repo_dirty):
     project = Project(
-        name="myrepo", path=str(repo_dirty), default_branch="main",
+        name="myrepo", path=str(repo_dirty), default_branch="main", remote="origin",
         test_cmd=None, test_timeout=10,
     )
     deps = HandlerDeps(
@@ -431,7 +431,7 @@ def test_cleanup_acquires_mutex(repo_dirty):
         )
 
     project = Project(
-        name="myrepo", path=str(repo_dirty), default_branch="main",
+        name="myrepo", path=str(repo_dirty), default_branch="main", remote="origin",
         test_cmd=None, test_timeout=10,
     )
     deps = HandlerDeps(

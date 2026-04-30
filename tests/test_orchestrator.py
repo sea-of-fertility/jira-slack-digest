@@ -36,7 +36,7 @@ def project_with_remote(tmp_path):
     return Project(
         name="myrepo",
         path=str(local),
-        default_branch="main",
+        default_branch="main", remote="origin",
         test_cmd="python3 -c pass",
         test_timeout=10,
     ), str(bare)
@@ -148,7 +148,7 @@ def test_self_repo_is_refused():
     self_project = Project(
         name="self",
         path=str(_BOT_DIR),
-        default_branch="main",
+        default_branch="main", remote="origin",
         test_cmd=None,
         test_timeout=10,
     )
@@ -166,7 +166,7 @@ def test_self_repo_check_resolves_symlinks(tmp_path):
     link = tmp_path / "linked"
     link.symlink_to(_BOT_DIR)
     project = Project(
-        name="alias", path=str(link), default_branch="main",
+        name="alias", path=str(link), default_branch="main", remote="origin",
         test_cmd=None, test_timeout=10,
     )
     cmd = ParsedCmd(type="fix", repo="alias", issue="CDS-1", instruction="x")
