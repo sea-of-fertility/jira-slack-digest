@@ -19,6 +19,7 @@ from typing import Optional
 class Context:
     repo: str
     remote: str
+    branch: Optional[str] = None  # None → use projects.md default_branch
 
 
 class ContextStore:
@@ -36,13 +37,17 @@ class ContextStore:
             remote = data.get("remote")
             if not repo or not remote:
                 return None
-            return Context(repo=repo, remote=remote)
+            branch = data.get("branch")  # may be None
+            return Context(repo=repo, remote=remote, branch=branch)
 
     def set(self, ctx: Context) -> None:
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-            tmp.write_text(json.dumps({"repo": ctx.repo, "remote": ctx.remote}))
+            payload = {"repo": ctx.repo, "remote": ctx.remote}
+            if ctx.branch:
+                payload["branch"] = ctx.branch
+            tmp.write_text(json.dumps(payload))
             os.replace(tmp, self.path)
 
     def clear(self) -> None:

@@ -303,7 +303,7 @@ def test_init_sets_context_when_remote_valid(tmp_path, real_repo):
     deps = _deps(registry={"ceph-api": real_repo}, context=store)
 
     sent, say = _record_say()
-    handle_message(text="init/ceph-api/306", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="init ceph-api -r 306", user_id=ALLOWED, say=say, deps=deps)
 
     assert any("컨텍스트 설정" in m for m in sent)
     ctx = store.get()
@@ -318,11 +318,84 @@ def test_init_rejects_unknown_remote(tmp_path, real_repo):
     deps = _deps(registry={"ceph-api": real_repo}, context=store)
 
     sent, say = _record_say()
-    handle_message(text="init/ceph-api/999", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="init ceph-api -r 999", user_id=ALLOWED, say=say, deps=deps)
 
     assert any("remote `999` 없음" in m for m in sent)
     assert any("305" in m and "306" in m for m in sent)
     assert store.get() is None
+
+
+def test_init_branch_override_persists(tmp_path, real_repo):
+    """`init ceph-api -b develop` writes branch into context."""
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+
+    sent, say = _record_say()
+    handle_message(text="init ceph-api -b develop", user_id=ALLOWED, say=say, deps=deps)
+    ctx = store.get()
+    assert ctx is not None
+    assert ctx.repo == "ceph-api"
+    assert ctx.remote == real_repo.remote  # projects.md default since no -r
+    assert ctx.branch == "develop"
+
+
+def test_init_both_flags(tmp_path, real_repo):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+
+    sent, say = _record_say()
+    handle_message(text="init ceph-api -r 306 -b develop", user_id=ALLOWED, say=say, deps=deps)
+    ctx = store.get()
+    assert ctx == __import__("bot_lib.context", fromlist=["Context"]).Context(
+        repo="ceph-api", remote="306", branch="develop"
+    )
+
+
+def test_init_flag_order_does_not_matter(tmp_path, real_repo):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+
+    sent, say = _record_say()
+    handle_message(text="init -b develop -r 306 ceph-api", user_id=ALLOWED, say=say, deps=deps)
+    ctx = store.get()
+    assert ctx is not None
+    assert ctx.repo == "ceph-api"
+    assert ctx.remote == "306"
+    assert ctx.branch == "develop"
+
+
+def test_init_unknown_flag_rejected(tmp_path, real_repo):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+
+    sent, say = _record_say()
+    handle_message(text="init ceph-api --foo bar", user_id=ALLOWED, say=say, deps=deps)
+    assert any("모르는 옵션" in m for m in sent)
+    assert store.get() is None
+
+
+def test_init_missing_flag_value(tmp_path, real_repo):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+
+    sent, say = _record_say()
+    handle_message(text="init ceph-api -r", user_id=ALLOWED, say=say, deps=deps)
+    assert any("remote 이름 필요" in m for m in sent)
+
+
+def test_init_missing_repo(tmp_path, real_repo):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+
+    sent, say = _record_say()
+    handle_message(text="init -r 305", user_id=ALLOWED, say=say, deps=deps)
+    assert any("repo" in m and "빠졌" in m for m in sent)
 
 
 def test_init_rejects_unknown_repo(tmp_path, real_repo):
@@ -331,7 +404,7 @@ def test_init_rejects_unknown_repo(tmp_path, real_repo):
     deps = _deps(registry={"ceph-api": real_repo}, context=store)
 
     sent, say = _record_say()
-    handle_message(text="init/typo-api/305", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="init typo-api -r 305", user_id=ALLOWED, say=say, deps=deps)
 
     assert any("모르는 repo" in m for m in sent)
     assert store.get() is None
@@ -344,7 +417,7 @@ def test_init_clear_removes_context(tmp_path):
 
     deps = _deps(context=store)
     sent, say = _record_say()
-    handle_message(text="init/clear", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="clear", user_id=ALLOWED, say=say, deps=deps)
 
     assert any("삭제" in m for m in sent)
     assert store.get() is None
@@ -400,6 +473,32 @@ def test_three_token_without_context_returns_error(tmp_path):
         text="fix/CDS-99/x", user_id=ALLOWED, say=say, deps=deps
     )
     assert any("컨텍스트 미설정" in m for m in sent)
+
+
+def test_three_token_uses_context_branch_override(tmp_path):
+    """If context.branch is set, orchestrator's project.default_branch is replaced."""
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="305", branch="develop"))
+
+    calls, fake = _stub_execute()
+    deps = _deps(execute=fake, context=store)
+    sent, say = _record_say()
+    handle_message(text="fix/CDS-99/x", user_id=ALLOWED, say=say, deps=deps)
+    assert calls[0]["project"].default_branch == "develop"  # overridden
+
+
+def test_three_token_no_branch_override_keeps_projects_md_default(tmp_path):
+    """If context.branch is None, projects.md default_branch survives."""
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="305"))  # no branch
+
+    calls, fake = _stub_execute()
+    deps = _deps(execute=fake, context=store)
+    sent, say = _record_say()
+    handle_message(text="fix/CDS-99/x", user_id=ALLOWED, say=say, deps=deps)
+    assert calls[0]["project"].default_branch == "main"  # _project()'s default
 
 
 def test_four_token_ignores_context(tmp_path):
@@ -764,7 +863,7 @@ def test_cleanup_resets_working_tree(repo_dirty):
         execute=lambda *a, **kw: None,
     )
     sent, say = _record_say()
-    handle_message(text="cleanup/myrepo", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="cleanup myrepo", user_id=ALLOWED, say=say, deps=deps)
 
     # working tree is clean
     status = subprocess.run(
@@ -787,7 +886,7 @@ def test_cleanup_unknown_repo_lists_known():
         execute=lambda *a, **kw: None,
     )
     sent, say = _record_say()
-    handle_message(text="cleanup/zzz", user_id=ALLOWED, say=say, deps=deps)
+    handle_message(text="cleanup zzz", user_id=ALLOWED, say=say, deps=deps)
     assert any("모르는 repo" in m for m in sent)
 
 
@@ -825,7 +924,7 @@ def test_cleanup_acquires_mutex(repo_dirty):
         text="fix/myrepo/CDS-1/x", user_id=ALLOWED, say=say1, deps=deps,
     ))
     t2 = threading.Thread(target=lambda: handle_message(
-        text="cleanup/myrepo", user_id=ALLOWED, say=say2, deps=deps,
+        text="cleanup myrepo", user_id=ALLOWED, say=say2, deps=deps,
     ))
     t1.start()
     job_running.wait(timeout=2)

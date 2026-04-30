@@ -59,6 +59,21 @@ def test_set_creates_parent_dir(tmp_path):
     assert nested.exists()
 
 
+def test_set_with_branch_persists(tmp_path):
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="ceph-api", remote="305", branch="develop"))
+    out = store.get()
+    assert out == Context(repo="ceph-api", remote="305", branch="develop")
+
+
+def test_set_without_branch_omits_field(tmp_path):
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="ceph-api", remote="305"))
+    out = store.get()
+    assert out is not None
+    assert out.branch is None
+
+
 def test_concurrent_set_does_not_corrupt(tmp_path):
     store = ContextStore(str(tmp_path / "ctx.json"))
 

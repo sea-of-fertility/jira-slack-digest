@@ -1,5 +1,6 @@
 import difflib
 import re
+import shlex
 from dataclasses import dataclass, field, replace
 from typing import Callable, Mapping, Optional
 
@@ -10,7 +11,7 @@ from bot_lib.registry import Project
 
 
 HELP_TEXT = (
-    "사용법:\n"
+    "작업 명령 (슬래시):\n"
     "  <type>/<repo>/<issue>/<instruction>      (4토큰)\n"
     "  <type>/<issue>/<instruction>             (3토큰, init 후)\n\n"
     "type: fix | feat | refactor | chore | docs | test | perf\n"
@@ -18,26 +19,24 @@ HELP_TEXT = (
     "instruction: 자유 텍스트\n\n"
     "예: fix/ceph-api/CDS-99/null check 추가\n"
     "    fix/CDS-99/null check 추가  (init 후)\n\n"
-    "컨텍스트:\n"
-    "  init/<repo>/<remote>  - 세션 컨텍스트 설정 (이후 3토큰 가능)\n"
-    "  init/clear            - 컨텍스트 삭제\n"
-    "  status                - 현재 컨텍스트·등록 repo 조회\n\n"
-    "조회 (read-only, 평문):\n"
-    "  repo                  - 등록된 repo 목록 (경로·기본 branch·remote)\n"
-    "  remote                - 컨텍스트 repo 의 git remote 목록\n"
-    "  remote <repo>         - 명시한 repo 의 remote 목록\n"
-    "  branch                - 현재 컨텍스트 repo 의 최근 10개 브랜치\n"
-    "  branch <repo>         - 명시한 repo 의 최근 10개\n"
-    "  branch all            - 전체 (최대 50개)\n"
-    "  branch <repo> all     - 명시 repo 전체\n\n"
+    "컨텍스트 (CLI 플래그, write):\n"
+    "  init <repo>                       - 컨텍스트 set (remote·branch는 projects.md default)\n"
+    "  init <repo> -r <remote>           - + remote override\n"
+    "  init <repo> -b <branch>           - + branch override (base 브랜치)\n"
+    "  init <repo> -r <remote> -b <branch>\n"
+    "  clear                             - 컨텍스트 삭제\n"
+    "  cleanup <repo>                    - 워킹 트리 초기화\n\n"
+    "조회 (평문, read-only):\n"
+    "  repo                  - 등록된 repo 목록\n"
+    "  remote [<repo>]       - git remote 목록\n"
+    "  branch [<repo>] [all] - 최근 브랜치 (default 10, all=최대 50)\n"
+    "  status                - 현재 컨텍스트 + repo 요약\n\n"
     "기타:\n"
-    "  help / 도움말         - 이 안내\n"
-    "  cleanup/<repo>        - 워킹 트리 초기화"
+    "  help / 도움말         - 이 안내"
 )
 
 
-CLEANUP_RE = re.compile(r"^cleanup/(\S+)$")
-INIT_RE = re.compile(r"^init/(\S+?)/(\S+)$")
+CLEANUP_RE = re.compile(r"^cleanup\s+(\S+)$")
 BRANCH_RE = re.compile(r"^branch(?:\s+(.+))?$")
 REMOTE_RE = re.compile(r"^remote(?:\s+(\S+))?$")
 REPO_RE = re.compile(r"^repo$")
@@ -73,8 +72,8 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
         say(HELP_TEXT)
         return
 
-    # §B init/clear
-    if stripped == "init/clear":
+    # §B clear (was init/clear)
+    if stripped == "clear":
         _handle_init_clear(deps, say)
         return
 
@@ -83,10 +82,9 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
         _handle_status(deps, say)
         return
 
-    # §B init/<repo>/<remote>
-    init_match = INIT_RE.match(stripped)
-    if init_match:
-        _handle_init(init_match.group(1), init_match.group(2), deps, say)
+    # §B init <repo> [-r remote] [-b branch]
+    if stripped == "init" or stripped.startswith("init "):
+        _handle_init_command(stripped, deps, say)
         return
 
     # repo (read-only)
@@ -120,27 +118,31 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
         return
 
     # 3토큰: cmd.repo is None → 컨텍스트에서 채움
+    ctx = deps.context.get() if deps.context else None
     if cmd.repo is None:
-        ctx = deps.context.get() if deps.context else None
         if ctx is None:
             say(
-                "❌ 컨텍스트 미설정. 4토큰 형식을 쓰거나 `init/<repo>/<remote>` 로 컨텍스트 설정하세요.\n"
+                "❌ 컨텍스트 미설정. 4토큰 형식을 쓰거나 `init <repo>` 로 컨텍스트 설정하세요.\n"
                 "예: fix/ceph-api/CDS-99/x"
             )
             return
         cmd = replace(cmd, repo=ctx.repo)
         repo_remote_override = ctx.remote
+        branch_override = ctx.branch  # may be None — orchestrator falls back
     else:
         repo_remote_override = None
+        branch_override = None
 
     project = deps.registry.get(cmd.repo)
     if project is None:
         say(_unknown_repo_message(cmd.repo, deps.registry))
         return
 
-    # 3토큰 경로에서는 컨텍스트의 remote 가 projects.md default 를 덮어씀
+    # 3토큰 경로에서는 컨텍스트가 projects.md default 를 덮어씀
     if repo_remote_override and repo_remote_override != project.remote:
         project = replace(project, remote=repo_remote_override)
+    if branch_override and branch_override != project.default_branch:
+        project = replace(project, default_branch=branch_override)
 
     _run_with_mutex(cmd, project, deps, say)
 
@@ -172,27 +174,104 @@ def _run_with_mutex(cmd, project: Project, deps: HandlerDeps, say: Say) -> None:
 # ---- init / status / clear (§B) ----
 
 
-def _handle_init(repo_name: str, remote: str, deps: HandlerDeps, say: Say) -> None:
-    project = deps.registry.get(repo_name)
-    if project is None:
-        say(_unknown_repo_message(repo_name, deps.registry))
+@dataclass(frozen=True)
+class _InitArgs:
+    repo: str
+    remote: Optional[str]    # None → projects.md default
+    branch: Optional[str]    # None → projects.md default
+
+
+def _parse_init_args(text: str) -> _InitArgs:
+    """Parse `init <repo> [-r remote] [-b branch]` (CLI-style, order-free).
+
+    Raises CommandError-equivalent ValueError with user-friendly message.
+    """
+    if not text.startswith("init"):
+        raise ValueError("init 사용법: `init <repo> [-r remote] [-b branch]`")
+    rest = text[len("init"):].strip()
+    if not rest:
+        raise ValueError("init 사용법: `init <repo> [-r remote] [-b branch]`")
+
+    try:
+        tokens = shlex.split(rest)
+    except ValueError as e:
+        raise ValueError(f"인자 파싱 실패: {e}") from None
+
+    repo: Optional[str] = None
+    remote: Optional[str] = None
+    branch: Optional[str] = None
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ("-r", "--remote"):
+            if i + 1 >= len(tokens):
+                raise ValueError(f"`{tok}` 다음에 remote 이름 필요")
+            remote = tokens[i + 1]
+            i += 2
+        elif tok in ("-b", "--branch"):
+            if i + 1 >= len(tokens):
+                raise ValueError(f"`{tok}` 다음에 branch 이름 필요")
+            branch = tokens[i + 1]
+            i += 2
+        elif tok.startswith("-"):
+            raise ValueError(f"모르는 옵션: `{tok}` (지원: -r/--remote, -b/--branch)")
+        else:
+            if repo is not None:
+                raise ValueError(
+                    f"repo 가 이미 `{repo}` 인데 추가 위치 인자 `{tok}` 발견"
+                )
+            repo = tok
+            i += 1
+
+    if repo is None:
+        raise ValueError("repo 가 빠졌습니다. `init <repo> [-r remote] [-b branch]`")
+
+    return _InitArgs(repo=repo, remote=remote, branch=branch)
+
+
+def _handle_init_command(text: str, deps: HandlerDeps, say: Say) -> None:
+    try:
+        args = _parse_init_args(text)
+    except ValueError as e:
+        say(f"❌ {e}")
         return
 
-    if not _git_remote_exists(project.path, remote):
+    project = deps.registry.get(args.repo)
+    if project is None:
+        say(_unknown_repo_message(args.repo, deps.registry))
+        return
+
+    # Resolve remote (default: projects.md)
+    resolved_remote = args.remote if args.remote else project.remote
+    if not _git_remote_exists(project.path, resolved_remote):
         known = _list_git_remotes(project.path)
         known_str = ", ".join(f"`{r}`" for r in known) if known else "(없음)"
         say(
-            f"❌ `{repo_name}` 에 remote `{remote}` 없음.\n"
+            f"❌ `{args.repo}` 에 remote `{resolved_remote}` 없음.\n"
             f"사용 가능: {known_str}"
         )
         return
+
+    # Resolve branch (default: projects.md)
+    resolved_branch = args.branch  # None → orchestrator falls back to project.default_branch
 
     if deps.context is None:
         say("⚠️ 컨텍스트 저장소 미설정 (deps.context). 봇 설정 확인 필요.")
         return
 
-    deps.context.set(Context(repo=repo_name, remote=remote))
-    say(f"✅ 컨텍스트 설정: `{repo_name}` / `{remote}`\n이후 3토큰 명령 가능: `<type>/<issue>/<instruction>`")
+    deps.context.set(Context(
+        repo=args.repo,
+        remote=resolved_remote,
+        branch=resolved_branch,
+    ))
+
+    branch_label = resolved_branch if resolved_branch else f"{project.default_branch} (default)"
+    say(
+        f"✅ 컨텍스트 설정: `{args.repo}`\n"
+        f"  remote: `{resolved_remote}`\n"
+        f"  branch: `{branch_label}`\n"
+        f"이후 3토큰 명령 가능: `<type>/<issue>/<instruction>`"
+    )
 
 
 def _handle_init_clear(deps: HandlerDeps, say: Say) -> None:
