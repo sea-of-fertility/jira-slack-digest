@@ -43,6 +43,8 @@ def main() -> None:
 
     context = ContextStore(str(CONTEXT_PATH))
 
+    env_bot_user = os.environ.get("BOT_USER") or None  # optional
+
     deps = HandlerDeps(
         allowed_user_id=_require("SLACK_USER_ID"),
         registry=registry,
@@ -50,6 +52,7 @@ def main() -> None:
         jira_email=_require("JIRA_EMAIL"),
         jira_token=_require("JIRA_API_TOKEN"),
         context=context,
+        env_bot_user=env_bot_user,
     )
 
     app = App(token=_require("SLACK_BOT_TOKEN"))
@@ -65,9 +68,12 @@ def main() -> None:
 
     ctx_now = context.get()
     ctx_str = f"{ctx_now.repo}/{ctx_now.remote}" if ctx_now else "(none)"
+    who_str = (
+        (ctx_now.who if ctx_now and ctx_now.who else env_bot_user) or "(unset)"
+    )
     sys.stderr.write(
         f"[info] bot online — {len(registry)} project(s) registered: "
-        f"{', '.join(sorted(registry))} | context: {ctx_str}\n"
+        f"{', '.join(sorted(registry))} | context: {ctx_str} | who: {who_str}\n"
     )
     SocketModeHandler(app, _require("SLACK_APP_TOKEN")).start()
 

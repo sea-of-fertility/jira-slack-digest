@@ -20,6 +20,7 @@ class Context:
     repo: str
     remote: str
     branch: Optional[str] = None  # None → use projects.md default_branch
+    who: Optional[str] = None     # None → fall back to env BOT_USER, then no-namespace
 
 
 class ContextStore:
@@ -37,8 +38,12 @@ class ContextStore:
             remote = data.get("remote")
             if not repo or not remote:
                 return None
-            branch = data.get("branch")  # may be None
-            return Context(repo=repo, remote=remote, branch=branch)
+            return Context(
+                repo=repo,
+                remote=remote,
+                branch=data.get("branch"),  # may be None
+                who=data.get("who"),
+            )
 
     def set(self, ctx: Context) -> None:
         with self._lock:
@@ -47,6 +52,8 @@ class ContextStore:
             payload = {"repo": ctx.repo, "remote": ctx.remote}
             if ctx.branch:
                 payload["branch"] = ctx.branch
+            if ctx.who:
+                payload["who"] = ctx.who
             tmp.write_text(json.dumps(payload))
             os.replace(tmp, self.path)
 

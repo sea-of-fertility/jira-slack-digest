@@ -74,6 +74,30 @@ def test_set_without_branch_omits_field(tmp_path):
     assert out.branch is None
 
 
+def test_set_with_who_persists(tmp_path):
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="ceph-api", remote="305", who="hjpark"))
+    out = store.get()
+    assert out is not None
+    assert out.who == "hjpark"
+
+
+def test_set_without_who_omits_field(tmp_path):
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="ceph-api", remote="305"))
+    assert store.get().who is None
+
+
+def test_legacy_json_without_who_loads_cleanly(tmp_path):
+    """Older context.json (pre-who) must still parse — who falls back to None."""
+    p = tmp_path / "ctx.json"
+    p.write_text('{"repo": "ceph-api", "remote": "305"}')
+    store = ContextStore(str(p))
+    out = store.get()
+    assert out is not None
+    assert out.who is None
+
+
 def test_concurrent_set_does_not_corrupt(tmp_path):
     store = ContextStore(str(tmp_path / "ctx.json"))
 

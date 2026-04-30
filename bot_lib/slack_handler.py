@@ -31,7 +31,13 @@ HELP_TEXT = (
     "  repo                  - 등록된 repo 목록\n"
     "  remote [<repo>]       - git remote 목록\n"
     "  branch [<repo>] [all] - 최근 브랜치\n"
+    "  who                   - 현재 사용자 이름 (브랜치 namespace 용)\n"
     "  status                - 현재 컨텍스트 + repo 요약\n\n"
+    "사용자 (who):\n"
+    "  who <name>            - 사용자 이름 설정 (ASCII 영숫자 + . - _)\n"
+    "  who clear             - 사용자 이름 해제 (env BOT_USER fallback)\n"
+    "  → 설정 시 브랜치 형식: <type>/<who>/<issue>\n"
+    "  → 미설정 시: <type>/<issue>\n\n"
     "기타:\n"
     "  help / 도움말"
 )
@@ -41,6 +47,8 @@ CLEANUP_RE = re.compile(r"^cleanup\s+(\S+)$")
 BRANCH_RE = re.compile(r"^branch(?:\s+(.+))?$")
 REMOTE_RE = re.compile(r"^remote(?:\s+(\S+))?$")
 REPO_RE = re.compile(r"^repo$")
+WHO_RE = re.compile(r"^who(?:\s+(\S+))?$")
+WHO_VALID_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 BRANCH_DEFAULT_LIMIT = 10
 BRANCH_HARD_CAP = 50
 
@@ -58,6 +66,7 @@ class HandlerDeps:
     execute: Callable[..., orchestrator.JobOutcome] = orchestrator.execute_job
     mutex: RepoMutex = field(default_factory=RepoMutex)
     context: Optional[ContextStore] = None
+    env_bot_user: Optional[str] = None   # fallback when context.who is None
 
 
 def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> None:
@@ -86,6 +95,12 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
     # §B init <repo> [-r remote] [-b branch]
     if stripped == "init" or stripped.startswith("init "):
         _handle_init_command(stripped, deps, say)
+        return
+
+    # who [<name>] | who clear  (read + write hybrid, like branch)
+    who_match = WHO_RE.match(stripped)
+    if who_match:
+        _handle_who(who_match.group(1), deps, say)
         return
 
     # repo (read-only)
@@ -145,23 +160,27 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
     if branch_override and branch_override != project.default_branch:
         project = replace(project, default_branch=branch_override)
 
-    _run_with_mutex(cmd, project, deps, say)
+    who, _source = _resolve_who(deps)
+
+    _run_with_mutex(cmd, project, deps, say, who=who)
 
 
 # ---- mutex-guarded execute (§12 Q8) ----
 
 
-def _run_with_mutex(cmd, project: Project, deps: HandlerDeps, say: Say) -> None:
+def _run_with_mutex(cmd, project: Project, deps: HandlerDeps, say: Say, *, who: Optional[str] = None) -> None:
     lock = deps.mutex.lock_for(project.name)
     if not lock.acquire(blocking=False):
         say(f"⏳ `{project.name}` 작업 중. 순서대로 처리되니 대기해 주세요.")
         lock.acquire()
 
     try:
-        say(f"⏳ {cmd.type}/{cmd.issue} 시작합니다 ({project.name}/{project.remote})")
+        who_label = f" / {who}" if who else ""
+        say(f"⏳ {cmd.type}/{cmd.issue} 시작합니다 ({project.name}/{project.remote}{who_label})")
         outcome = deps.execute(
             cmd,
             project,
+            who=who,
             jira_base_url=deps.jira_base_url,
             jira_email=deps.jira_email,
             jira_token=deps.jira_token,
@@ -311,6 +330,71 @@ def _list_git_remotes(repo_path: str) -> list[str]:
     except git_ops.GitError:
         return []
     return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+# ---- who ----
+
+
+def _resolve_who(deps: HandlerDeps) -> tuple[Optional[str], str]:
+    """Returns (who, source) — context.who > env BOT_USER > None."""
+    ctx = deps.context.get() if deps.context else None
+    if ctx and ctx.who:
+        return ctx.who, "context"
+    if deps.env_bot_user:
+        return deps.env_bot_user, "env"
+    return None, "unset"
+
+
+def _handle_who(arg: Optional[str], deps: HandlerDeps, say: Say) -> None:
+    if arg is None:
+        # Read-only path
+        who, source = _resolve_who(deps)
+        if who is None:
+            say(
+                "현재 사용자: *없음* — 브랜치 namespace 비활성\n"
+                "  설정: `who <name>` 또는 .env 의 `BOT_USER`"
+            )
+            return
+        say(f"현재 사용자: `{who}` ({source})")
+        return
+
+    # Write path
+    if arg == "clear":
+        if deps.context is None:
+            say("⚠️ 컨텍스트 저장소 미설정.")
+            return
+        ctx = deps.context.get()
+        if ctx is None or ctx.who is None:
+            say("✅ 이미 context.who 미설정. (env BOT_USER 가 있다면 그쪽 사용)")
+            return
+        deps.context.set(Context(
+            repo=ctx.repo, remote=ctx.remote, branch=ctx.branch, who=None,
+        ))
+        say("✅ context.who 삭제됨. " + (
+            f"이제 env BOT_USER (`{deps.env_bot_user}`) 사용."
+            if deps.env_bot_user else "브랜치 namespace 비활성."
+        ))
+        return
+
+    # who <name> — set
+    if not WHO_VALID_RE.match(arg):
+        say(
+            f"❌ 사용자 이름 `{arg}` 가 형식에 안 맞음.\n"
+            "ASCII 영숫자와 `.`, `-`, `_` 만 허용 (브랜치 호환)."
+        )
+        return
+
+    if deps.context is None:
+        say("⚠️ 컨텍스트 저장소 미설정 — `who` 변경 저장 불가.")
+        return
+    ctx = deps.context.get()
+    if ctx is None:
+        say("❌ 먼저 `init <repo>` 로 컨텍스트 설정 후 `who` 사용하세요.")
+        return
+    deps.context.set(Context(
+        repo=ctx.repo, remote=ctx.remote, branch=ctx.branch, who=arg,
+    ))
+    say(f"✅ 사용자 변경: `{arg}` (이전: {ctx.who or '미설정'})\n  브랜치 형식: `<type>/{arg}/<issue>`")
 
 
 # ---- repo / remote (read-only listings) ----

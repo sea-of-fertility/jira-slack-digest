@@ -198,6 +198,36 @@ def test_push_uses_project_remote(project_with_remote, monkeypatch):
     assert captured.get("brexist") == ["305"]
 
 
+def test_branch_namespaces_with_who(project_with_remote, monkeypatch):
+    """When who is provided, branch becomes <type>/<who>/<issue>."""
+    project, _ = project_with_remote
+    _stub_fetch_issue(monkeypatch)
+    _stub_claude_edits_file(monkeypatch)
+    _stub_gh_pr_create(monkeypatch)
+
+    cmd = ParsedCmd(type="fix", repo="myrepo", issue="CDS-99", instruction="x")
+    out = execute_job(
+        cmd, project,
+        jira_base_url="u", jira_email="e", jira_token="t",
+        who="hjpark",
+    )
+    assert out.branch == "fix/hjpark/CDS-99"
+
+
+def test_branch_no_namespace_when_who_none(project_with_remote, monkeypatch):
+    project, _ = project_with_remote
+    _stub_fetch_issue(monkeypatch)
+    _stub_claude_edits_file(monkeypatch)
+    _stub_gh_pr_create(monkeypatch)
+
+    cmd = ParsedCmd(type="fix", repo="myrepo", issue="CDS-99", instruction="x")
+    out = execute_job(
+        cmd, project,
+        jira_base_url="u", jira_email="e", jira_token="t",
+    )
+    assert out.branch == "fix/CDS-99"
+
+
 def test_self_repo_check_resolves_symlinks(tmp_path):
     from bot_lib.orchestrator import BLOCKED, _BOT_DIR
 

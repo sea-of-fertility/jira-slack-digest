@@ -50,17 +50,18 @@ def execute_job(
     jira_token: str,
     progress: Optional[Progress] = None,
     job_cap_seconds: int = JOB_CAP_SECONDS,
+    who: Optional[str] = None,
 ) -> JobOutcome:
     """Run a single Slack-triggered job end-to-end (plan.md §7).
 
-    Cycle (a): happy path + early aborts.
-    Cycle (b): test-failure retry loop with --resume + stateless fallback,
-               no-incremental-change short-circuit, and the 30-minute cap.
+    `who`: branch namespace. When set, branch becomes `<type>/<who>/<issue>`
+    (matches the team's `feat/hjpark/...` convention). When None, branch
+    stays the original `<type>/<issue>` form.
     """
     say = progress or (lambda _msg: None)
     start = time.monotonic()
     deadline = start + job_cap_seconds
-    branch = f"{cmd.type}/{cmd.issue}"
+    branch = _build_branch(cmd, who)
 
     # Refuse self-modification. Branching off main here would swap our own
     # source out of the working tree, breaking launchd restarts and leaving
@@ -73,7 +74,7 @@ def execute_job(
 
     # §7 step 6
     if not git_ops.is_clean(project.path):
-        return _blocked(branch, f"워킹 트리 dirty. cleanup/{project.name} 로 초기화 가능.")
+        return _blocked(branch, f"워킹 트리 dirty. cleanup {project.name} 로 초기화 가능.")
 
     # §7 step 5
     say(f"Jira {cmd.issue} 로드 중")
@@ -296,6 +297,12 @@ def _prepare_branch(project: Project, branch: str, say: Progress) -> None:
     except git_ops.GitError:
         pass
     git_ops.create_branch_from(project.path, branch, project.default_branch)
+
+
+def _build_branch(cmd: ParsedCmd, who: Optional[str]) -> str:
+    if who:
+        return f"{cmd.type}/{who}/{cmd.issue}"
+    return f"{cmd.type}/{cmd.issue}"
 
 
 def _build_prompt(cmd: ParsedCmd, issue: jira_client.JiraIssue) -> str:

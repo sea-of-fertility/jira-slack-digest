@@ -495,6 +495,127 @@ def test_run_no_branch_override_keeps_projects_md_default(tmp_path):
     assert calls[0]["project"].default_branch == "main"
 
 
+def test_run_passes_context_who_to_execute(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="305", who="hjpark"))
+    calls, fake = _stub_execute()
+    deps = _deps(execute=fake, context=store)
+    sent, say = _record_say()
+    handle_message(text="run fix CDS-99 -d x", user_id=ALLOWED, say=say, deps=deps)
+    assert calls[0].get("who") == "hjpark"
+
+
+def test_run_falls_back_to_env_bot_user(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="305"))  # no who
+    calls, fake = _stub_execute()
+    deps = _deps(execute=fake, context=store)
+    deps.env_bot_user = "envname"
+    sent, say = _record_say()
+    handle_message(text="run fix CDS-99 -d x", user_id=ALLOWED, say=say, deps=deps)
+    assert calls[0].get("who") == "envname"
+
+
+def test_run_who_none_when_neither_set(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="305"))  # no who
+    calls, fake = _stub_execute()
+    deps = _deps(execute=fake, context=store)  # no env_bot_user
+    sent, say = _record_say()
+    handle_message(text="run fix CDS-99 -d x", user_id=ALLOWED, say=say, deps=deps)
+    assert calls[0].get("who") is None
+
+
+# ---- who ----
+
+
+def test_who_unset_returns_none(tmp_path):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(context=store)  # no env_bot_user
+    sent, say = _record_say()
+    handle_message(text="who", user_id=ALLOWED, say=say, deps=deps)
+    assert any("없음" in m for m in sent)
+
+
+def test_who_returns_env_when_only_env_set(tmp_path):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(context=store)
+    deps.env_bot_user = "hjpark"
+    sent, say = _record_say()
+    handle_message(text="who", user_id=ALLOWED, say=say, deps=deps)
+    assert any("hjpark" in m and "env" in m for m in sent)
+
+
+def test_who_returns_context_value_overriding_env(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="origin", who="overridden"))
+    deps = _deps(context=store)
+    deps.env_bot_user = "envname"
+    sent, say = _record_say()
+    handle_message(text="who", user_id=ALLOWED, say=say, deps=deps)
+    assert any("overridden" in m and "context" in m for m in sent)
+    assert all("envname" not in m for m in sent)
+
+
+def test_who_set_persists_to_context(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="origin"))
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(text="who hjpark", user_id=ALLOWED, say=say, deps=deps)
+    assert store.get().who == "hjpark"
+    assert any("사용자 변경" in m for m in sent)
+
+
+def test_who_set_rejects_invalid_chars(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="origin"))
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(text="who 박형준", user_id=ALLOWED, say=say, deps=deps)
+    assert any("형식" in m for m in sent)
+    assert store.get().who is None
+
+
+def test_who_set_without_context_errors(tmp_path):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))  # empty
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(text="who hjpark", user_id=ALLOWED, say=say, deps=deps)
+    assert any("init" in m and "컨텍스트" in m for m in sent)
+
+
+def test_who_clear_removes_context_who(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="origin", who="hjpark"))
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(text="who clear", user_id=ALLOWED, say=say, deps=deps)
+    assert store.get().who is None
+    assert any("삭제" in m for m in sent)
+
+
+def test_who_set_accepts_dot_dash_underscore(tmp_path):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="origin"))
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    for valid in ("hj.park", "hj-park", "hj_park", "HJPark99"):
+        handle_message(text=f"who {valid}", user_id=ALLOWED, say=say, deps=deps)
+        assert store.get().who == valid
+
+
 # ---- repo / remote (read-only) ----
 
 
