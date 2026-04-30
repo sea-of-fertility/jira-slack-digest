@@ -1,10 +1,27 @@
+"""Slack DM command parser for the bot's job command.
 
+Form: `run <type> <issue> [-d <description>]`
+
+  - `<type>`         one of fix | feat | refactor | chore | docs | test | perf
+  - `<issue>`        Jira key, e.g. CDS-99 (^[A-Z]+-\\d+$)
+  - `-d <text>`      optional. Greedy: everything after `-d ` is consumed as
+                     a single string. Must come last among any flags.
+                     Omit for "trust Jira" mode — claude reads only Jira
+                     description + comments.
+
+Repo is NOT taken at command time. It comes from the session context
+(`init <repo>` / `init <repo> -r <remote>` / etc.) — write commands
+remain on the existing path.
+"""
 import re
 from dataclasses import dataclass
 from typing import Optional
 
 ALLOWED_TYPES = frozenset({"fix", "feat", "refactor", "chore", "docs", "test", "perf"})
 ISSUE_RE = re.compile(r"^[A-Z]+-\d+$")
+_DASH_D_RE = re.compile(r"\s-d(?:\s+|$)")  # `-d` boundary: leading whitespace, then space or EOL
+
+USAGE = "형식: run <type> <issue> [-d <지시문>]"
 
 
 class CommandError(ValueError):
@@ -14,9 +31,9 @@ class CommandError(ValueError):
 @dataclass(frozen=True)
 class ParsedCmd:
     type: str
-    repo: Optional[str]   # None means "use the session context's repo" (3-token form)
+    repo: Optional[str]          # always None — repo is supplied by context
     issue: str
-    instruction: str
+    instruction: Optional[str]   # None when -d not provided (Jira-trust mode)
 
 
 def is_help(text: str) -> bool:
@@ -25,43 +42,40 @@ def is_help(text: str) -> bool:
 
 
 def parse(text: str) -> ParsedCmd:
-    """Accepts both 4-token (`<type>/<repo>/<issue>/<instruction>`) and
-    3-token (`<type>/<issue>/<instruction>`) forms. The 3-token form is
-    chosen when the second token matches the Jira issue regex — repo
-    aliases (kebab-case) and issue keys (UPPERCASE-NUMBER) don't collide.
-    """
+    """Parse `run <type> <issue> [-d <greedy text>]`. Raises CommandError."""
     stripped = text.strip()
+    if not (stripped == "run" or stripped.startswith("run ")):
+        raise CommandError(USAGE)
+    rest = stripped[len("run"):].strip()
+    if not rest:
+        raise CommandError(USAGE)
 
-    # Try 3-token first by splitting at most 2 slashes
-    head_split = stripped.split("/", maxsplit=2)
-    if len(head_split) == 3 and ISSUE_RE.match(head_split[1].strip()):
-        type_ = head_split[0].strip()
-        issue = head_split[1].strip()
-        instruction = head_split[2].strip()
-        _validate_type(type_)
-        for name, value in (("type", type_), ("issue", issue), ("instruction", instruction)):
-            if not value:
-                raise CommandError(f"{name} 토큰이 비어 있습니다")
-        return ParsedCmd(type=type_, repo=None, issue=issue, instruction=instruction)
+    # Greedy split on `-d` boundary. Whatever follows the first `-d ` token
+    # becomes instruction verbatim; whatever precedes is positional.
+    m = _DASH_D_RE.search(rest)
+    if m:
+        head = rest[:m.start()].strip()
+        tail = rest[m.end():].strip()
+        instruction: Optional[str] = tail if tail else None
+    else:
+        head = rest
+        instruction = None
 
-    # Otherwise expect 4-token form
-    parts = stripped.split("/", maxsplit=3)
-    if len(parts) != 4:
-        raise CommandError("형식: <type>/<repo>/<issue>/<instruction> 또는 <type>/<issue>/<instruction>")
+    tokens = head.split()
+    if len(tokens) == 0:
+        raise CommandError(f"type / issue 토큰이 비어 있습니다. {USAGE}")
+    if len(tokens) == 1:
+        raise CommandError(f"issue 토큰이 빠졌습니다. {USAGE}")
+    if len(tokens) > 2:
+        extras = " ".join(tokens[2:])
+        raise CommandError(f"인식 못한 토큰: `{extras}`. {USAGE}")
 
-    type_, repo, issue = (p.strip() for p in parts[:3])
-    instruction = parts[3].strip()
-
-    for name, value in (("type", type_), ("repo", repo), ("issue", issue), ("instruction", instruction)):
-        if not value:
-            raise CommandError(f"{name} 토큰이 비어 있습니다")
-
+    type_, issue = tokens[0], tokens[1]
     _validate_type(type_)
-
     if not ISSUE_RE.match(issue):
         raise CommandError("issue 형식: PROJ-123 같은 Jira 키")
 
-    return ParsedCmd(type=type_, repo=repo, issue=issue, instruction=instruction)
+    return ParsedCmd(type=type_, repo=None, issue=issue, instruction=instruction)
 
 
 def _validate_type(type_: str) -> None:

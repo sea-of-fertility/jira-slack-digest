@@ -68,6 +68,14 @@ def _deps(execute=None, registry=None, context=None):
     )
 
 
+def _ctx_store(tmp_path, repo="myrepo", remote="origin", branch=None):
+    """Create a ContextStore pre-set to (repo, remote, branch)."""
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo=repo, remote=remote, branch=branch))
+    return store
+
+
 # ---- allowlist ----
 
 
@@ -101,67 +109,54 @@ def test_dou_um_mal_returns_help_text():
 def test_bad_format_returns_helpful_error():
     sent, say = _record_say()
     handle_message(
-        text="fix/ceph-api/CDS99/x", user_id=ALLOWED, say=say, deps=_deps()
+        text="run fix CDS99 -d x", user_id=ALLOWED, say=say, deps=_deps()
     )
     assert len(sent) == 1
     assert "issue 형식" in sent[0]
 
 
-def test_empty_instruction_returns_error():
+def test_non_run_prefix_returns_format_error():
+    """Slash form is no longer accepted."""
     sent, say = _record_say()
-    handle_message(
-        text="fix/myrepo/CDS-1/", user_id=ALLOWED, say=say, deps=_deps()
-    )
-    assert any("비어" in m for m in sent)
-
-
-# ---- repo lookup ----
-
-
-def test_unknown_repo_with_close_match_suggests():
-    sent, say = _record_say()
-    deps = _deps(registry={"ceph-api": _project("ceph-api")})
-    handle_message(
-        text="fix/cef-api/CDS-1/x", user_id=ALLOWED, say=say, deps=deps
-    )
+    handle_message(text="fix/CDS-99/x", user_id=ALLOWED, say=say, deps=_deps())
     assert len(sent) == 1
-    assert "`cef-api`" in sent[0]
-    assert "ceph-api" in sent[0]
-
-
-def test_unknown_repo_with_no_close_match_lists_all():
-    sent, say = _record_say()
-    deps = _deps(registry={"alpha": _project("alpha"), "beta": _project("beta")})
-    handle_message(
-        text="fix/zzzz/CDS-1/x", user_id=ALLOWED, say=say, deps=deps
-    )
-    assert len(sent) == 1
-    assert "`alpha`" in sent[0]
-    assert "`beta`" in sent[0]
+    assert "run" in sent[0]
 
 
 # ---- happy path → execute is called ----
 
 
-def test_valid_command_invokes_execute():
+def test_valid_command_invokes_execute(tmp_path):
     calls, fake = _stub_execute()
     sent, say = _record_say()
     handle_message(
-        text="fix/myrepo/CDS-99/null check 추가",
-        user_id=ALLOWED, say=say, deps=_deps(execute=fake),
+        text="run fix CDS-99 -d null check 추가",
+        user_id=ALLOWED, say=say,
+        deps=_deps(execute=fake, context=_ctx_store(tmp_path)),
     )
     assert len(calls) == 1
     cmd = calls[0]["cmd"]
     assert isinstance(cmd, ParsedCmd)
     assert cmd.type == "fix"
-    assert cmd.repo == "myrepo"
+    assert cmd.repo == "myrepo"   # filled from context
     assert cmd.issue == "CDS-99"
     assert cmd.instruction == "null check 추가"
     assert calls[0]["jira_email"] == "me@x.com"
 
 
-def test_progress_callback_wired_to_say():
-    """The orchestrator's progress messages should reach Slack via say()."""
+def test_run_without_dash_d_passes_none_instruction(tmp_path):
+    """Jira-trust mode: no -d → cmd.instruction is None."""
+    calls, fake = _stub_execute()
+    sent, say = _record_say()
+    handle_message(
+        text="run fix CDS-99",
+        user_id=ALLOWED, say=say,
+        deps=_deps(execute=fake, context=_ctx_store(tmp_path)),
+    )
+    assert calls[0]["cmd"].instruction is None
+
+
+def test_progress_callback_wired_to_say(tmp_path):
     sent, say = _record_say()
 
     def fake_execute(cmd, project, *, progress, **kwargs):
@@ -173,10 +168,11 @@ def test_progress_callback_wired_to_say():
         )
 
     handle_message(
-        text="fix/myrepo/CDS-99/x",
-        user_id=ALLOWED, say=say, deps=_deps(execute=fake_execute),
+        text="run fix CDS-99 -d x",
+        user_id=ALLOWED, say=say,
+        deps=_deps(execute=fake_execute, context=_ctx_store(tmp_path)),
     )
-    assert "midway" in sent  # came through the progress channel
+    assert "midway" in sent
 
 
 # ---- outcome formatting ----
@@ -446,7 +442,7 @@ def test_status_with_context(tmp_path):
 # ---- 3-token routing ----
 
 
-def test_three_token_uses_context_repo(tmp_path):
+def test_run_uses_context_repo(tmp_path):
     from bot_lib.context import Context, ContextStore
     store = ContextStore(str(tmp_path / "ctx.json"))
     store.set(Context(repo="myrepo", remote="305"))
@@ -456,7 +452,7 @@ def test_three_token_uses_context_repo(tmp_path):
 
     sent, say = _record_say()
     handle_message(
-        text="fix/CDS-99/null check",
+        text="run fix CDS-99 -d null check",
         user_id=ALLOWED, say=say, deps=deps,
     )
     assert len(calls) == 1
@@ -464,19 +460,18 @@ def test_three_token_uses_context_repo(tmp_path):
     assert calls[0]["project"].remote == "305"  # context override applied
 
 
-def test_three_token_without_context_returns_error(tmp_path):
+def test_run_without_context_returns_error(tmp_path):
     from bot_lib.context import ContextStore
     store = ContextStore(str(tmp_path / "ctx.json"))  # empty
     deps = _deps(context=store)
     sent, say = _record_say()
     handle_message(
-        text="fix/CDS-99/x", user_id=ALLOWED, say=say, deps=deps
+        text="run fix CDS-99 -d x", user_id=ALLOWED, say=say, deps=deps
     )
     assert any("컨텍스트 미설정" in m for m in sent)
 
 
-def test_three_token_uses_context_branch_override(tmp_path):
-    """If context.branch is set, orchestrator's project.default_branch is replaced."""
+def test_run_uses_context_branch_override(tmp_path):
     from bot_lib.context import Context, ContextStore
     store = ContextStore(str(tmp_path / "ctx.json"))
     store.set(Context(repo="myrepo", remote="305", branch="develop"))
@@ -484,12 +479,11 @@ def test_three_token_uses_context_branch_override(tmp_path):
     calls, fake = _stub_execute()
     deps = _deps(execute=fake, context=store)
     sent, say = _record_say()
-    handle_message(text="fix/CDS-99/x", user_id=ALLOWED, say=say, deps=deps)
-    assert calls[0]["project"].default_branch == "develop"  # overridden
+    handle_message(text="run fix CDS-99 -d x", user_id=ALLOWED, say=say, deps=deps)
+    assert calls[0]["project"].default_branch == "develop"
 
 
-def test_three_token_no_branch_override_keeps_projects_md_default(tmp_path):
-    """If context.branch is None, projects.md default_branch survives."""
+def test_run_no_branch_override_keeps_projects_md_default(tmp_path):
     from bot_lib.context import Context, ContextStore
     store = ContextStore(str(tmp_path / "ctx.json"))
     store.set(Context(repo="myrepo", remote="305"))  # no branch
@@ -497,28 +491,8 @@ def test_three_token_no_branch_override_keeps_projects_md_default(tmp_path):
     calls, fake = _stub_execute()
     deps = _deps(execute=fake, context=store)
     sent, say = _record_say()
-    handle_message(text="fix/CDS-99/x", user_id=ALLOWED, say=say, deps=deps)
-    assert calls[0]["project"].default_branch == "main"  # _project()'s default
-
-
-def test_four_token_ignores_context(tmp_path):
-    """Explicit 4-token bypasses context — uses projects.md remote."""
-    from bot_lib.context import Context, ContextStore
-    store = ContextStore(str(tmp_path / "ctx.json"))
-    store.set(Context(repo="alpha", remote="999"))  # context says alpha/999
-
-    calls, fake = _stub_execute()
-    deps = _deps(
-        execute=fake,
-        registry={"myrepo": _project()},  # myrepo.remote = origin (default)
-        context=store,
-    )
-    sent, say = _record_say()
-    handle_message(
-        text="fix/myrepo/CDS-1/x", user_id=ALLOWED, say=say, deps=deps
-    )
-    assert calls[0]["cmd"].repo == "myrepo"
-    assert calls[0]["project"].remote == "origin"  # not "999" from context
+    handle_message(text="run fix CDS-99 -d x", user_id=ALLOWED, say=say, deps=deps)
+    assert calls[0]["project"].default_branch == "main"
 
 
 # ---- repo / remote (read-only) ----
@@ -747,7 +721,7 @@ def test_branch_all_shows_full_list(tmp_path):
 # ---- mutex (§12 Q8) ----
 
 
-def test_same_repo_serializes_with_wait_message():
+def test_same_repo_serializes_with_wait_message(tmp_path):
     """Two requests on the same repo: second waits, first runs to completion
     before second begins, second sees the 'wait' notice."""
     mutex = RepoMutex()
@@ -767,17 +741,17 @@ def test_same_repo_serializes_with_wait_message():
             pr_url=None, message="완료", attempts=1,
         )
 
-    deps = _deps(execute=execute)
+    deps = _deps(execute=execute, context=_ctx_store(tmp_path))
     deps.mutex = mutex
 
     sent_a, say_a = _record_say()
     sent_b, say_b = _record_say()
 
     t1 = threading.Thread(target=lambda: handle_message(
-        text="fix/myrepo/CDS-1/x", user_id=ALLOWED, say=say_a, deps=deps,
+        text="run fix CDS-1 -d x", user_id=ALLOWED, say=say_a, deps=deps,
     ))
     t2 = threading.Thread(target=lambda: handle_message(
-        text="fix/myrepo/CDS-2/y", user_id=ALLOWED, say=say_b, deps=deps,
+        text="run fix CDS-2 -d y", user_id=ALLOWED, say=say_b, deps=deps,
     ))
     t1.start()
     started.wait(timeout=2)
@@ -791,45 +765,10 @@ def test_same_repo_serializes_with_wait_message():
     assert any("작업 중" in m for m in sent_b)
 
 
-def test_different_repos_run_concurrently():
-    mutex = RepoMutex()
-    a_running = threading.Event()
-    b_running = threading.Event()
-
-    def execute(cmd, project, **kwargs):
-        if project.name == "alpha":
-            a_running.set()
-            b_running.wait(timeout=2)
-        else:
-            b_running.set()
-            a_running.wait(timeout=2)
-        return orchestrator.JobOutcome(
-            status=orchestrator.SUCCESS, branch="fix/X-1",
-            commit_sha=None, diff_stat="", test_status="skip",
-            pr_url=None, message="완료", attempts=1,
-        )
-
-    deps = HandlerDeps(
-        allowed_user_id=ALLOWED,
-        registry={"alpha": _project("alpha"), "beta": _project("beta")},
-        jira_base_url="u", jira_email="e", jira_token="t",
-        execute=execute, mutex=mutex,
-    )
-
-    s1, say1 = _record_say()
-    s2, say2 = _record_say()
-    t1 = threading.Thread(target=lambda: handle_message(
-        text="fix/alpha/CDS-1/x", user_id=ALLOWED, say=say1, deps=deps,
-    ))
-    t2 = threading.Thread(target=lambda: handle_message(
-        text="fix/beta/CDS-2/y", user_id=ALLOWED, say=say2, deps=deps,
-    ))
-    t1.start(); t2.start()
-    t1.join(timeout=3); t2.join(timeout=3)
-
-    # If they couldn't run concurrently the events would never both fire,
-    # and the threads would time out (still alive after join).
-    assert not t1.is_alive() and not t2.is_alive()
+# (test_different_repos_run_concurrently removed: in the run-form schema repo
+# always comes from the single shared ContextStore, so two concurrent threads
+# cannot target different repos in one process. Mutex behavior is still
+# covered by the same-repo serialization test above and bot_lib/tests/test_mutex.py.)
 
 
 # ---- cleanup (§12 Q15) ----
@@ -909,10 +848,13 @@ def test_cleanup_acquires_mutex(repo_dirty):
         name="myrepo", path=str(repo_dirty), default_branch="main", remote="origin",
         test_cmd=None, test_timeout=10,
     )
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(repo_dirty.parent / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="origin"))
     deps = HandlerDeps(
         allowed_user_id=ALLOWED, registry={"myrepo": project},
         jira_base_url="u", jira_email="e", jira_token="t",
-        execute=slow_execute, mutex=mutex,
+        execute=slow_execute, mutex=mutex, context=store,
     )
 
     # Even though the working tree is dirty here, the FIRST request bypasses
@@ -921,7 +863,7 @@ def test_cleanup_acquires_mutex(repo_dirty):
     s1, say1 = _record_say()
     s2, say2 = _record_say()
     t1 = threading.Thread(target=lambda: handle_message(
-        text="fix/myrepo/CDS-1/x", user_id=ALLOWED, say=say1, deps=deps,
+        text="run fix CDS-1 -d x", user_id=ALLOWED, say=say1, deps=deps,
     ))
     t2 = threading.Thread(target=lambda: handle_message(
         text="cleanup myrepo", user_id=ALLOWED, say=say2, deps=deps,

@@ -3,135 +3,97 @@ import pytest
 from bot_lib.commands import CommandError, is_help, parse
 
 
-def test_parse_returns_four_fields():
-    cmd = parse("fix/ceph-api/CDS-99/null check 추가")
-    assert cmd.type == "fix"
-    assert cmd.repo == "ceph-api"
-    assert cmd.issue == "CDS-99"
-    assert cmd.instruction == "null check 추가"
+# ---- run form happy path ----
 
 
-# ---- 3-token form (uses session context, repo=None) ----
-
-
-def test_parse_three_token_returns_repo_none():
-    cmd = parse("fix/CDS-99/null check 추가")
+def test_parse_with_dash_d_instruction():
+    cmd = parse("run fix CDS-99 -d null check 추가")
     assert cmd.type == "fix"
     assert cmd.repo is None
     assert cmd.issue == "CDS-99"
     assert cmd.instruction == "null check 추가"
 
 
-def test_parse_three_token_preserves_slashes_in_instruction():
-    cmd = parse("fix/CDS-99/path/with/slashes")
-    assert cmd.repo is None
-    assert cmd.issue == "CDS-99"
-    assert cmd.instruction == "path/with/slashes"
-
-
-def test_parse_three_token_multiline():
-    cmd = parse("docs/CDS-1/line1\nline2")
-    assert cmd.repo is None
-    assert "line1" in cmd.instruction and "line2" in cmd.instruction
-
-
-def test_parse_three_token_with_whitespace_around_tokens():
-    cmd = parse(" fix / CDS-99 / x ")
-    assert cmd.repo is None
-    assert cmd.issue == "CDS-99"
-    assert cmd.instruction == "x"
-
-
-def test_parse_three_token_unknown_type_rejected():
-    with pytest.raises(CommandError, match="지원 type"):
-        parse("hotfix/CDS-99/x")
-
-
-def test_parse_three_token_empty_instruction_rejected():
-    with pytest.raises(CommandError, match="instruction"):
-        parse("fix/CDS-99/")
-
-
-# ---- ambiguity: a "repo" that happens to look like an issue regex ----
-# Repo names are kebab-case lowercase by convention; issue regex requires
-# UPPERCASE letters + dash + digits, so they cannot collide. This test
-# documents the behavior on the boundary case.
-
-
-def test_uppercase_in_token2_picks_three_token():
-    """When token-2 matches ^[A-Z]+-\\d+$ the parser treats it as the issue
-    key (3-token form). Repo aliases that violate the issue regex stay in
-    4-token form."""
-    cmd = parse("fix/MYREPO/CDS-99/x")  # MYREPO doesn't match issue regex (no -\d+)
-    assert cmd.repo == "MYREPO"
-    assert cmd.issue == "CDS-99"
-
-
-def test_instruction_preserves_slashes():
-    cmd = parse("fix/jira-digest/CDS-99/path/with/slashes")
-    assert cmd.instruction == "path/with/slashes"
-
-
-def test_instruction_allows_multiline():
-    text = "fix/ceph-api/CDS-2099/새 예외 클래스 생성.\n- IoException 상속\n- /error 라우팅"
-    cmd = parse(text)
-    assert "라우팅" in cmd.instruction
-    assert "\n" in cmd.instruction
-
-
-def test_strips_outer_whitespace():
-    cmd = parse("  fix/ceph-api/CDS-99/x  ")
+def test_parse_without_dash_d_means_jira_trust():
+    cmd = parse("run fix CDS-99")
     assert cmd.type == "fix"
+    assert cmd.issue == "CDS-99"
+    assert cmd.instruction is None
+
+
+def test_parse_dash_d_greedy_consumes_remainder():
+    cmd = parse("run fix CDS-99 -d controller 만 수정. service 는 두기.")
+    assert cmd.instruction == "controller 만 수정. service 는 두기."
+
+
+def test_parse_dash_d_preserves_slashes_and_hyphens():
+    cmd = parse("run fix CDS-99 -d /api/v2 경로 라우팅 — IOException 재사용")
+    assert cmd.instruction == "/api/v2 경로 라우팅 — IOException 재사용"
+
+
+def test_parse_dash_d_multiline():
+    cmd = parse("run fix CDS-99 -d line1\nline2\nline3")
+    assert cmd.instruction == "line1\nline2\nline3"
+
+
+def test_parse_strips_outer_whitespace():
+    cmd = parse("   run  fix  CDS-99   -d   x   ")
+    assert cmd.type == "fix"
+    assert cmd.issue == "CDS-99"
     assert cmd.instruction == "x"
 
 
-def test_strips_each_token():
-    cmd = parse("fix / ceph-api / CDS-99 / 지시")
-    assert cmd.repo == "ceph-api"
-    assert cmd.issue == "CDS-99"
+def test_parse_dash_d_empty_value_treated_as_none():
+    """`-d ` followed by nothing → instruction is None (jira-trust mode)."""
+    cmd = parse("run fix CDS-99 -d ")
+    assert cmd.instruction is None
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "fix/ceph-api/CDS-99",         # 3 tokens
-        "fix/ceph-api",                # 2 tokens
-        "fix",                         # 1 token
-        "",                            # empty
-    ],
-)
-def test_rejects_non_four_tokens(text):
-    with pytest.raises(CommandError, match="형식"):
-        parse(text)
+def test_parse_dash_d_with_dashed_words_in_value():
+    """Once -d starts, subsequent flag-looking tokens stay in instruction."""
+    cmd = parse("run fix CDS-99 -d use --no-cache flag")
+    assert cmd.instruction == "use --no-cache flag"
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "/ceph-api/CDS-99/x",           # empty type
-        "fix//CDS-99/x",                # empty repo
-        "fix/ceph-api//x",              # empty issue
-        "fix/ceph-api/CDS-99/",         # empty instruction
-        "fix/ceph-api/CDS-99/   ",      # whitespace-only instruction
-    ],
-)
-def test_rejects_empty_token(text):
-    with pytest.raises(CommandError, match="비어"):
-        parse(text)
+# ---- error cases ----
 
 
-def test_rejects_unknown_type():
+def test_parse_rejects_no_run_prefix():
+    with pytest.raises(CommandError, match="run <type>"):
+        parse("fix/CDS-99/x")  # old slash form no longer accepted
+
+
+def test_parse_rejects_run_only():
+    with pytest.raises(CommandError, match="run <type>"):
+        parse("run")
+
+
+def test_parse_rejects_missing_issue():
+    with pytest.raises(CommandError, match="issue"):
+        parse("run fix")
+
+
+def test_parse_rejects_bad_type():
     with pytest.raises(CommandError, match="지원 type"):
-        parse("hotfix/ceph-api/CDS-99/x")
+        parse("run hotfix CDS-99 -d x")
 
 
 @pytest.mark.parametrize(
     "issue",
     ["CDS99", "cds-99", "CDS-", "-99", "CDS-9a", "123-CDS"],
 )
-def test_rejects_bad_issue_format(issue):
+def test_parse_rejects_bad_issue_format(issue):
     with pytest.raises(CommandError, match="issue 형식"):
-        parse(f"fix/ceph-api/{issue}/x")
+        parse(f"run fix {issue} -d x")
+
+
+def test_parse_rejects_extra_positional_tokens():
+    """Anything beyond `run <type> <issue>` (before -d) is an error."""
+    with pytest.raises(CommandError, match="인식 못한 토큰"):
+        parse("run fix CDS-99 extra-token")
+
+
+# ---- is_help ----
 
 
 @pytest.mark.parametrize("text", ["help", "HELP", "Help", "  help  ", "도움말", "  도움말  "])
@@ -145,8 +107,7 @@ def test_is_help_true(text):
         "",
         "help me",
         "도움말 좀",
-        "fix/ceph-api/CDS-99/help",
-        "도움말/x/y/z",
+        "run fix CDS-99 -d help",  # 'help' inside instruction must NOT trigger help mode
         "halp",
     ],
 )

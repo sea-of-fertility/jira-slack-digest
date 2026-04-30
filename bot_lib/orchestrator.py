@@ -120,7 +120,7 @@ def execute_job(
         if test_status == test_runner.PASS
         else "Tests: SKIPPED"
     )
-    commit_msg = f"{cmd.type}({cmd.issue}): {issue.title}\n\n{cmd.instruction}\n\n{msg_tail}"
+    commit_msg = _build_commit_msg(cmd, issue, msg_tail)
     sha = git_ops.commit_all(project.path, commit_msg)
     diff = git_ops.run_git(project.path, "show", "--stat", "--format=", "HEAD").strip()
 
@@ -299,17 +299,31 @@ def _prepare_branch(project: Project, branch: str, say: Progress) -> None:
 
 
 def _build_prompt(cmd: ParsedCmd, issue: jira_client.JiraIssue) -> str:
-    return (
-        f"Jira 이슈 {issue.key}: {issue.title}\n\n"
-        f"본문:\n{issue.description or '(none)'}\n\n"
-        f"최근 댓글:\n{issue.comments_text or '(none)'}\n\n"
-        f"--- 사용자 지시 ---\n{cmd.instruction}"
-    )
+    parts = [
+        f"Jira 이슈 {issue.key}: {issue.title}",
+        f"본문:\n{issue.description or '(none)'}",
+        f"최근 댓글:\n{issue.comments_text or '(none)'}",
+    ]
+    if cmd.instruction:
+        parts.append(f"--- 사용자 지시 ---\n{cmd.instruction}")
+    return "\n\n".join(parts)
+
+
+def _build_commit_msg(cmd: ParsedCmd, issue: jira_client.JiraIssue, msg_tail: str) -> str:
+    parts = [f"{cmd.type}({cmd.issue}): {issue.title}"]
+    if cmd.instruction:
+        parts.append(cmd.instruction)
+    parts.append(msg_tail)
+    return "\n\n".join(parts)
 
 
 def _create_pr(repo: str, cmd: ParsedCmd, issue: jira_client.JiraIssue) -> Optional[str]:
     title = f"{cmd.type}({cmd.issue}): {issue.title}"
-    body = f"{cmd.instruction}\n\nCloses {cmd.issue}"
+    body = (
+        f"{cmd.instruction}\n\nCloses {cmd.issue}"
+        if cmd.instruction
+        else f"Closes {cmd.issue}"
+    )
     proc = subprocess.run(
         ["gh", "pr", "create", "--title", title, "--body", body],
         cwd=repo,

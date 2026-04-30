@@ -11,28 +11,29 @@ from bot_lib.registry import Project
 
 
 HELP_TEXT = (
-    "작업 명령 (슬래시):\n"
-    "  <type>/<repo>/<issue>/<instruction>      (4토큰)\n"
-    "  <type>/<issue>/<instruction>             (3토큰, init 후)\n\n"
-    "type: fix | feat | refactor | chore | docs | test | perf\n"
-    "issue: PROJ-123 형식\n"
-    "instruction: 자유 텍스트\n\n"
-    "예: fix/ceph-api/CDS-99/null check 추가\n"
-    "    fix/CDS-99/null check 추가  (init 후)\n\n"
-    "컨텍스트 (CLI 플래그, write):\n"
+    "작업 (run):\n"
+    "  run <type> <issue>             - Jira 본문·댓글만으로 처리 (Jira-trust 모드)\n"
+    "  run <type> <issue> -d <지시문> - + 사용자 지시문 (-d 그리디: 끝까지 캡처)\n\n"
+    "  type: fix | feat | refactor | chore | docs | test | perf\n"
+    "  issue: PROJ-123 형식 (Jira 키)\n"
+    "  repo / remote / branch: 컨텍스트(init)에서 자동 사용\n\n"
+    "  예:\n"
+    "    run fix CDS-99\n"
+    "    run fix CDS-99 -d controller 만 수정. service 는 두기.\n\n"
+    "컨텍스트 (CLI 플래그):\n"
     "  init <repo>                       - 컨텍스트 set (remote·branch는 projects.md default)\n"
     "  init <repo> -r <remote>           - + remote override\n"
-    "  init <repo> -b <branch>           - + branch override (base 브랜치)\n"
+    "  init <repo> -b <branch>           - + branch override\n"
     "  init <repo> -r <remote> -b <branch>\n"
     "  clear                             - 컨텍스트 삭제\n"
     "  cleanup <repo>                    - 워킹 트리 초기화\n\n"
-    "조회 (평문, read-only):\n"
+    "조회 (평문):\n"
     "  repo                  - 등록된 repo 목록\n"
     "  remote [<repo>]       - git remote 목록\n"
-    "  branch [<repo>] [all] - 최근 브랜치 (default 10, all=최대 50)\n"
+    "  branch [<repo>] [all] - 최근 브랜치\n"
     "  status                - 현재 컨텍스트 + repo 요약\n\n"
     "기타:\n"
-    "  help / 도움말         - 이 안내"
+    "  help / 도움말"
 )
 
 
@@ -117,18 +118,18 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
         say(f"❌ {e}")
         return
 
-    # 3토큰: cmd.repo is None → 컨텍스트에서 채움
+    # `run` form always sets cmd.repo=None — fill from context
     ctx = deps.context.get() if deps.context else None
     if cmd.repo is None:
         if ctx is None:
             say(
-                "❌ 컨텍스트 미설정. 4토큰 형식을 쓰거나 `init <repo>` 로 컨텍스트 설정하세요.\n"
-                "예: fix/ceph-api/CDS-99/x"
+                "❌ 컨텍스트 미설정. `init <repo>` 로 컨텍스트 설정하세요.\n"
+                "예: init ceph-api -r 305"
             )
             return
         cmd = replace(cmd, repo=ctx.repo)
         repo_remote_override = ctx.remote
-        branch_override = ctx.branch  # may be None — orchestrator falls back
+        branch_override = ctx.branch
     else:
         repo_remote_override = None
         branch_override = None
