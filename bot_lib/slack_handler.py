@@ -28,11 +28,12 @@ HELP_TEXT = (
     "  clear                             - 컨텍스트 삭제\n"
     "  cleanup <repo>                    - 워킹 트리 초기화\n\n"
     "조회 (평문):\n"
-    "  repo                  - 등록된 repo 목록\n"
-    "  remote [<repo>]       - git remote 목록\n"
-    "  branch [<repo>] [all] - 최근 브랜치\n"
-    "  who                   - 현재 사용자 이름 (브랜치 namespace 용)\n"
-    "  status                - 현재 컨텍스트 + repo 요약\n\n"
+    "  repo                       - 등록된 repo 목록\n"
+    "  remote [<repo>]            - git remote 목록\n"
+    "  branch [<repo>] [all]      - 최근 브랜치\n"
+    "  find <pattern> [-r <repo>] - 파일 경로 검색 (case-insensitive)\n"
+    "  who                        - 현재 사용자 이름\n"
+    "  status                     - 컨텍스트 + repo 요약\n\n"
     "사용자 (who):\n"
     "  who <name>            - 사용자 이름 설정 (ASCII 영숫자 + . - _)\n"
     "  who clear             - 사용자 이름 해제 (env BOT_USER fallback)\n"
@@ -49,8 +50,10 @@ REMOTE_RE = re.compile(r"^remote(?:\s+(\S+))?$")
 REPO_RE = re.compile(r"^repo$")
 WHO_RE = re.compile(r"^who(?:\s+(\S+))?$")
 WHO_VALID_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
+FIND_RE = re.compile(r"^find(?:\s+(.+))?$")
 BRANCH_DEFAULT_LIMIT = 10
 BRANCH_HARD_CAP = 50
+FIND_DEFAULT_LIMIT = 20
 
 
 Say = Callable[[str], None]
@@ -101,6 +104,12 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
     who_match = WHO_RE.match(stripped)
     if who_match:
         _handle_who(who_match.group(1), deps, say)
+        return
+
+    # find <pattern> [-r <repo>] (read-only)
+    find_match = FIND_RE.match(stripped)
+    if find_match:
+        _handle_find(find_match.group(1), deps, say)
         return
 
     # repo (read-only)
@@ -395,6 +404,91 @@ def _handle_who(arg: Optional[str], deps: HandlerDeps, say: Say) -> None:
         repo=ctx.repo, remote=ctx.remote, branch=ctx.branch, who=arg,
     ))
     say(f"✅ 사용자 변경: `{arg}` (이전: {ctx.who or '미설정'})\n  브랜치 형식: `<type>/{arg}/<issue>`")
+
+
+# ---- find (read-only file lookup) ----
+
+
+def _handle_find(arg: Optional[str], deps: HandlerDeps, say: Say) -> None:
+    if not arg or not arg.strip():
+        say(
+            "❌ 패턴 입력 필요. 사용법: `find <pattern> [-r <repo>]`\n"
+            "예: `find ApiOsdService`"
+        )
+        return
+
+    try:
+        pattern, repo_override = _parse_find_args(arg)
+    except ValueError as e:
+        say(f"❌ {e}")
+        return
+
+    if repo_override:
+        repo_name = repo_override
+    else:
+        ctx = deps.context.get() if deps.context else None
+        if ctx is None:
+            say(
+                "❌ 컨텍스트 미설정. `find <pattern> -r <repo>` 로 명시하거나 "
+                "`init <repo>` 로 컨텍스트 설정하세요."
+            )
+            return
+        repo_name = ctx.repo
+
+    project = deps.registry.get(repo_name)
+    if project is None:
+        say(_unknown_repo_message(repo_name, deps.registry))
+        return
+
+    try:
+        matches, total = git_ops.find_files(project.path, pattern, limit=FIND_DEFAULT_LIMIT)
+    except git_ops.GitError as e:
+        say(f"❌ 파일 검색 실패: {e}")
+        return
+
+    say(_format_find_results(project, pattern, matches, total))
+
+
+def _parse_find_args(arg: str) -> tuple[str, Optional[str]]:
+    """Parse `<pattern> [-r <repo>]` (or `-r <repo> <pattern>`)."""
+    tokens = arg.split()
+    pattern: Optional[str] = None
+    repo: Optional[str] = None
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ("-r", "--repo"):
+            if i + 1 >= len(tokens):
+                raise ValueError(f"`{tok}` 다음에 repo 이름 필요")
+            repo = tokens[i + 1]
+            i += 2
+        elif tok.startswith("-"):
+            raise ValueError(f"모르는 옵션: `{tok}` (지원: -r/--repo)")
+        else:
+            if pattern is not None:
+                raise ValueError(f"패턴 중복: `{tok}` (이미 `{pattern}`)")
+            pattern = tok
+            i += 1
+    if pattern is None:
+        raise ValueError("패턴 입력 필요")
+    return pattern, repo
+
+
+def _format_find_results(project, pattern: str, matches: list[str], total: int) -> str:
+    if total == 0:
+        return f"❌ `{pattern}` 일치 파일 없음 ({project.name})"
+
+    shown = len(matches)
+    if shown == total:
+        header = f"`{pattern}` — {total}개 발견 ({project.name}):"
+    else:
+        header = f"`{pattern}` — {total}개 중 처음 {shown} ({project.name}):"
+
+    body = "\n".join(f"  {m}" for m in matches)
+    footer = ""
+    if total > shown:
+        footer = f"\n  … 외 {total - shown}개. 더 구체적인 패턴으로 좁혀주세요."
+    return f"{header}\n{body}{footer}"
 
 
 # ---- repo / remote (read-only listings) ----

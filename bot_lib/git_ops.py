@@ -113,6 +113,19 @@ def list_remotes(repo: str) -> list[RemoteInfo]:
     return result
 
 
+def find_files(repo: str, pattern: str, limit: int = 20) -> tuple[list[str], int]:
+    """Case-insensitive substring search on `git ls-files`. Returns
+    (top-N alphabetically sorted, total match count)."""
+    pat_lower = pattern.lower()
+    out = run_git(repo, "ls-files")
+    matches = sorted(
+        line for line in out.splitlines() if pat_lower in line.lower()
+    )
+    total = len(matches)
+    head = matches if limit <= 0 else matches[:limit]
+    return head, total
+
+
 def list_local_branches(repo: str, limit: int = 10) -> tuple[list[BranchInfo], int]:
     """Local branches sorted by most-recent-commit.
 

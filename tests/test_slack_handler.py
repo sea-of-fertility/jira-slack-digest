@@ -529,6 +529,123 @@ def test_run_who_none_when_neither_set(tmp_path):
     assert calls[0].get("who") is None
 
 
+# ---- find ----
+
+
+@pytest.fixture
+def find_repo(tmp_path):
+    """A real git repo with a few tracked Java-style files."""
+    r = tmp_path / "repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=r, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@x.com"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=r, check=True)
+    for path in [
+        "src/main/java/ApiOsdService.java",
+        "src/main/java/ApiOsdServiceImpl.java",
+        "src/test/java/ApiOsdServiceTest.java",
+        "src/main/java/CephExporter.java",
+    ]:
+        full = r / path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text("data")
+    subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=r, check=True, capture_output=True)
+    return Project(
+        name="myrepo", path=str(r), default_branch="main", remote="origin",
+        test_cmd=None, test_timeout=10,
+    )
+
+
+def test_find_uses_context_repo(tmp_path, find_repo):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="myrepo", remote="origin"))
+    deps = _deps(registry={"myrepo": find_repo}, context=store)
+    sent, say = _record_say()
+    handle_message(text="find ApiOsd", user_id=ALLOWED, say=say, deps=deps)
+    msg = sent[0]
+    assert "ApiOsdService.java" in msg
+    assert "ApiOsdServiceImpl.java" in msg
+    assert "ApiOsdServiceTest.java" in msg
+    assert "CephExporter.java" not in msg
+
+
+def test_find_case_insensitive(find_repo):
+    deps = _deps(registry={"myrepo": find_repo})
+    sent, say = _record_say()
+    handle_message(text="find apiosd -r myrepo", user_id=ALLOWED, say=say, deps=deps)
+    assert "ApiOsdService.java" in sent[0]
+
+
+def test_find_explicit_repo_flag(find_repo):
+    deps = _deps(registry={"ceph-api": find_repo})
+    sent, say = _record_say()
+    handle_message(text="find ApiOsd -r ceph-api", user_id=ALLOWED, say=say, deps=deps)
+    assert "ApiOsdService.java" in sent[0]
+
+
+def test_find_no_match_returns_message(find_repo):
+    deps = _deps(registry={"myrepo": find_repo})
+    sent, say = _record_say()
+    handle_message(text="find nonexistent_xyz -r myrepo", user_id=ALLOWED, say=say, deps=deps)
+    assert any("일치 파일 없음" in m for m in sent)
+
+
+def test_find_unknown_repo_suggests(find_repo):
+    deps = _deps(registry={"ceph-api": find_repo})
+    sent, say = _record_say()
+    handle_message(text="find ApiOsd -r cef-api", user_id=ALLOWED, say=say, deps=deps)
+    assert any("모르는 repo" in m for m in sent)
+
+
+def test_find_no_pattern_returns_usage(tmp_path):
+    deps = _deps()
+    sent, say = _record_say()
+    handle_message(text="find", user_id=ALLOWED, say=say, deps=deps)
+    assert any("패턴 입력 필요" in m or "사용법" in m for m in sent)
+
+
+def test_find_no_context_no_explicit_repo_errors(tmp_path):
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))  # empty
+    deps = _deps(context=store)
+    sent, say = _record_say()
+    handle_message(text="find ApiOsd", user_id=ALLOWED, say=say, deps=deps)
+    assert any("컨텍스트 미설정" in m for m in sent)
+
+
+def test_find_unknown_flag_rejected(find_repo):
+    deps = _deps(registry={"myrepo": find_repo})
+    sent, say = _record_say()
+    handle_message(text="find ApiOsd --foo bar -r myrepo", user_id=ALLOWED, say=say, deps=deps)
+    assert any("모르는 옵션" in m for m in sent)
+
+
+def test_find_truncation_hint_when_over_limit(tmp_path):
+    """When matches exceed FIND_DEFAULT_LIMIT, footer suggests narrowing."""
+    r = tmp_path / "big_repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=r, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@x.com"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=r, check=True)
+    for i in range(25):
+        (r / f"Service{i}.java").write_text("x")
+    subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=r, check=True, capture_output=True)
+    project = Project(
+        name="big", path=str(r), default_branch="main", remote="origin",
+        test_cmd=None, test_timeout=10,
+    )
+    deps = _deps(registry={"big": project})
+    sent, say = _record_say()
+    handle_message(text="find Service -r big", user_id=ALLOWED, say=say, deps=deps)
+    msg = sent[0]
+    assert "25개 중 처음 20" in msg
+    assert "외 5개" in msg
+    assert "더 구체적인 패턴" in msg
+
+
 # ---- who ----
 
 

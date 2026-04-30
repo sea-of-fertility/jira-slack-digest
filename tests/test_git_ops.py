@@ -17,6 +17,7 @@ from bot_lib.git_ops import (
     current_branch,
     diff_stat,
     fetch_and_track,
+    find_files,
     head_sha,
     is_clean,
     list_local_branches,
@@ -374,6 +375,79 @@ def test_list_local_branches_carries_author_and_age(repo):
 
 def test_list_remotes_empty_when_none(repo):
     assert list_remotes(repo) == []
+
+
+# ---- find_files ----
+
+
+def _add_tracked(repo, *paths):
+    for p in paths:
+        full = Path(repo) / p
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text("data")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "add fixtures")
+
+
+def test_find_files_case_insensitive(repo):
+    _add_tracked(
+        repo,
+        "src/main/java/ApiOsdService.java",
+        "src/main/java/ApiOsdServiceImpl.java",
+        "src/main/java/CephExporter.java",
+    )
+    matches, total = find_files(repo, "apiosd")
+    assert total == 2
+    assert matches == [
+        "src/main/java/ApiOsdService.java",
+        "src/main/java/ApiOsdServiceImpl.java",
+    ]
+
+
+def test_find_files_substring_anywhere_in_path(repo):
+    _add_tracked(repo, "src/main/java/v2/ApiOsdService.java")
+    matches, _ = find_files(repo, "v2")
+    assert "src/main/java/v2/ApiOsdService.java" in matches
+
+
+def test_find_files_alphabetical_sort(repo):
+    _add_tracked(
+        repo,
+        "src/c/Z.java",
+        "src/a/Z.java",
+        "src/b/Z.java",
+    )
+    matches, _ = find_files(repo, "Z")
+    assert matches == ["src/a/Z.java", "src/b/Z.java", "src/c/Z.java"]
+
+
+def test_find_files_respects_limit(repo):
+    paths = [f"src/file{i}.java" for i in range(30)]
+    _add_tracked(repo, *paths)
+    matches, total = find_files(repo, "file", limit=10)
+    assert len(matches) == 10
+    assert total == 30
+
+
+def test_find_files_limit_zero_returns_all(repo):
+    paths = [f"src/file{i}.java" for i in range(5)]
+    _add_tracked(repo, *paths)
+    matches, total = find_files(repo, "file", limit=0)
+    assert len(matches) == total == 5
+
+
+def test_find_files_no_match_returns_empty(repo):
+    matches, total = find_files(repo, "nonexistent_pattern_xyz")
+    assert matches == []
+    assert total == 0
+
+
+def test_find_files_excludes_untracked(repo):
+    """git ls-files only lists tracked files — untracked are invisible."""
+    (Path(repo) / "untracked.java").write_text("x")
+    matches, total = find_files(repo, "untracked")
+    assert matches == []
+    assert total == 0
 
 
 def test_list_remotes_returns_each_unique_name(repo, tmp_path):
