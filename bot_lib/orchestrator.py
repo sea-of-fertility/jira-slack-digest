@@ -127,7 +127,7 @@ def execute_job(
     # §7 step 13
     say("push 중")
     try:
-        git_ops.push(project.path, branch)
+        git_ops.push(project.path, branch, remote=project.remote)
     except git_ops.GitError as e:
         return JobOutcome(
             status=SUCCESS,
@@ -286,13 +286,13 @@ def _prepare_branch(project: Project, branch: str, say: Progress) -> None:
         say(f"기존 브랜치 {branch} 재사용")
         git_ops.checkout(project.path, branch)
         return
-    if git_ops.branch_exists_remote(project.path, branch):
+    if git_ops.branch_exists_remote(project.path, branch, remote=project.remote):
         say(f"원격 브랜치 {branch} fetch")
-        git_ops.fetch_and_track(project.path, branch)
+        git_ops.fetch_and_track(project.path, branch, remote=project.remote)
         return
     say(f"신규 브랜치 {branch} 생성 (base: {project.default_branch})")
     try:
-        git_ops.run_git(project.path, "pull", "origin", project.default_branch)
+        git_ops.run_git(project.path, "pull", project.remote, project.default_branch)
     except git_ops.GitError:
         pass
     git_ops.create_branch_from(project.path, branch, project.default_branch)

@@ -160,6 +160,44 @@ def test_self_repo_is_refused():
     assert "self-modification" in out.message or "자기 자신" in out.message
 
 
+def test_push_uses_project_remote(project_with_remote, monkeypatch):
+    """The remote configured on the Project must be passed through every
+    git_ops call site (push, branch_exists_remote, fetch_and_track, pull)."""
+    project, _ = project_with_remote
+    from dataclasses import replace
+    project = replace(project, remote="305")  # simulate non-origin remote
+
+    _stub_fetch_issue(monkeypatch)
+    _stub_claude_edits_file(monkeypatch)
+    _stub_gh_pr_create(monkeypatch)
+
+    captured = {}
+    real_push = __import__("bot_lib.git_ops", fromlist=["push"]).push
+    real_brexist = __import__("bot_lib.git_ops", fromlist=["branch_exists_remote"]).branch_exists_remote
+
+    def fake_push(repo, branch, remote="origin"):
+        captured.setdefault("push", []).append(remote)
+        # Don't actually push — would fail on this fake remote name
+        return None
+
+    def fake_brexist(repo, branch, remote="origin"):
+        captured.setdefault("brexist", []).append(remote)
+        return False  # treat as new branch path
+
+    monkeypatch.setattr("bot_lib.orchestrator.git_ops.push", fake_push)
+    monkeypatch.setattr(
+        "bot_lib.orchestrator.git_ops.branch_exists_remote", fake_brexist
+    )
+
+    cmd = ParsedCmd(type="fix", repo="myrepo", issue="CDS-99", instruction="x")
+    out = execute_job(
+        cmd, project, jira_base_url="u", jira_email="e", jira_token="t"
+    )
+    assert out.status == SUCCESS
+    assert captured.get("push") == ["305"]
+    assert captured.get("brexist") == ["305"]
+
+
 def test_self_repo_check_resolves_symlinks(tmp_path):
     from bot_lib.orchestrator import BLOCKED, _BOT_DIR
 
