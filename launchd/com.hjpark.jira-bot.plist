@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hjpark.jira-bot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/hyungjunpark/dev/jira-slack-digest/.venv/bin/python</string>
+        <string>/Users/hyungjunpark/dev/jira-slack-digest/bot.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/hyungjunpark/dev/jira-slack-digest</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Applications/cmux.app/Contents/Resources/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/hyungjunpark</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/hyungjunpark/Library/Logs/jira-bot.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/hyungjunpark/Library/Logs/jira-bot.err.log</string>
+</dict>
+</plist>
