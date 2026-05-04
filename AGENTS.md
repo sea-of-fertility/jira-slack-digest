@@ -82,39 +82,43 @@ which claude        # LLM_BACKEND=cli 를 쓸 때만 필요; 없으면 api/none 
 
 ---
 
-## 4. `.env` 생성
+## 4. `.env` 와 `projects.md` 생성 — 자동 wizard
 
-`.env.example` 을 복사해 사용자 값으로 치환. 값은 **반드시 쌍따옴표로 감쌀 것** — 공백 포함 값 (`claude -p --model haiku`) 이 `source` 시 깨지는 것 방지.
-
-```bash
-cp .env.example .env
-```
-
-치환 대상 (Edit 툴로 한 줄씩 교체):
-
-```
-JIRA_BASE_URL=<받은 값, 끝 슬래시 제거>
-JIRA_EMAIL=<받은 값>
-JIRA_API_TOKEN=<받은 값>
-SLACK_BOT_TOKEN=<받은 값>
-SLACK_APP_TOKEN=<받은 값>     # bot.py Socket Mode 용
-SLACK_USER_ID=<받은 값>
-
-# 아래는 기본값
-JIRA_EXTRA_JQL='statusCategory = "To Do"'
-LLM_BACKEND=cli
-LLM_CLI="claude -p --model haiku"
-```
-
-생성 후 검증:
+권장: 봇이 자체 wizard 를 띄우게 한다. 의존성 설치(§6) 후 사용자에게 다음을 안내:
 
 ```bash
+python bot.py
+```
+
+처음 실행 시 `.env` 또는 `projects.md` 가 비어 있으면 인터랙티브 wizard 가 시작되어 §1 의 6개 값 + (선택) repo 등록까지 한 화면에서 묻는다.
+
+- 시크릿(`*_TOKEN`, `*_API_KEY`) 입력은 `getpass` 로 마스킹 → 터미널·스크롤백 노출 없음
+- 입력값 echo 도 앞6/뒤4 마스킹
+- 작성된 `.env` 는 권한 600 으로 저장
+- 잘못된 입력(URL 형식, 이메일 `@` 누락 등)은 즉시 재요청
+- 이미 채워진 항목은 건드리지 않음
+
+기존 값을 다시 편집하고 싶으면:
+
+```bash
+python bot.py --setup
+```
+
+(빈 입력으로 Enter 하면 기존 값 유지)
+
+**주의**: launchd/systemd 처럼 stdin 이 TTY 가 아닌 환경에서는 wizard 가 뜰 수 없다. 누락 설정이 있으면 봇이 즉시 exit 2 로 종료하므로, 첫 setup 은 사용자가 **반드시 터미널에서 한 번** 실행해야 한다.
+
+### 4.1 (fallback) 수동으로 하고 싶다면
+
+`.env.example` 복사 후 손으로 채우는 방식도 여전히 동작한다. 시크릿은 큰따옴표로 감싸야 `source` 시 깨지지 않는다 (예: `LLM_CLI="claude -p"`). 작성 후:
+
+```bash
+chmod 600 .env
 set -a && source .env && set +a
-echo "base=$JIRA_BASE_URL email=$JIRA_EMAIL token=${JIRA_API_TOKEN:0:6}...${JIRA_API_TOKEN: -4}"
+echo "base=$JIRA_BASE_URL token=${JIRA_API_TOKEN:0:6}...${JIRA_API_TOKEN: -4}"
 ```
 
-- `command not found` 경고 나오면 **따옴표 누락** → 다시 확인.
-- 토큰 전체를 echo 하지 말 것.
+`projects.md` 는 마크다운 표 한 행 = 1 repo (§3.2 참조).
 
 ---
 
