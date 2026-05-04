@@ -39,7 +39,8 @@ HELP_TEXT = (
     "  cancel <repo>                     - 진행 중인 claude SIGTERM\n\n"
     "조회 (평문):\n"
     "  repo                       - 등록된 repo 목록\n"
-    "  remote [<repo>]            - git remote 목록\n"
+    "  remote [<repo>]            - git remote 목록 (인자 없으면 컨텍스트 repo)\n"
+    "  remote <name>              - 컨텍스트의 remote 변경 (registry 미등록 이름)\n"
     "  branch [<repo>] [all]      - 최근 브랜치\n"
     "  find <pattern> [-r <repo>] - 파일 경로 검색 (case-insensitive)\n"
     "  who                        - 현재 사용자 이름\n"
@@ -574,15 +575,56 @@ def _handle_repo(deps: HandlerDeps, say: Say) -> None:
     say("\n".join(lines))
 
 
+def _handle_remote_set(name: str, deps: HandlerDeps, say: Say) -> None:
+    """Update the context's remote to `name`. Preserves repo / branch / who."""
+    if deps.context is None:
+        say("⚠️ 컨텍스트 저장소 미설정.")
+        return
+    ctx = deps.context.get()
+    if ctx is None:
+        say(
+            "❌ 컨텍스트 미설정. 먼저 `init <repo>` 로 컨텍스트를 잡으세요.\n"
+            f"예: `init <repo> -r {name}`"
+        )
+        return
+    project = deps.registry.get(ctx.repo)
+    if project is None:
+        say(_unknown_repo_message(ctx.repo, deps.registry))
+        return
+    if not _git_remote_exists(project.path, name):
+        known = _list_git_remotes(project.path)
+        known_str = ", ".join(f"`{r}`" for r in known) if known else "(없음)"
+        say(
+            f"❌ `{ctx.repo}` 에 remote `{name}` 없음.\n"
+            f"사용 가능: {known_str}"
+        )
+        return
+    deps.context.set(Context(
+        repo=ctx.repo, remote=name, branch=ctx.branch, who=ctx.who,
+    ))
+    branch_note = f" · branch `{ctx.branch}` 유지" if ctx.branch else ""
+    say(f"✅ remote 변경: `{ctx.repo}` → `{name}`{branch_note}")
+
+
 def _handle_remote(arg: Optional[str], deps: HandlerDeps, say: Say) -> None:
-    """List git remotes (name + URL) for a repo. Arg or context decides which."""
+    """List git remotes, or set the context remote.
+
+    - `remote`         : 컨텍스트 repo 의 git remote 조회
+    - `remote <repo>`  : 등록된 repo 의 git remote 조회
+    - `remote <name>`  : <name> 이 registry 에 없으면 컨텍스트의 remote set
+                          (branch / who override 는 보존)
+    """
+    if arg and arg not in deps.registry:
+        _handle_remote_set(arg, deps, say)
+        return
+
     if arg:
         repo_name = arg
     else:
         ctx = deps.context.get() if deps.context else None
         if ctx is None:
             say(
-                "❌ 컨텍스트 미설정. `remote <repo>` 로 명시하거나 `init/<repo>/<remote>` 로 설정하세요.\n"
+                "❌ 컨텍스트 미설정. `remote <repo>` 로 명시하거나 `init <repo>` 로 설정하세요.\n"
                 f"등록된 repo: {', '.join(f'`{n}`' for n in sorted(deps.registry)) or '(없음)'}"
             )
             return

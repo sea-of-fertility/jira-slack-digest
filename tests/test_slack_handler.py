@@ -870,11 +870,56 @@ def test_remote_no_context_no_arg_returns_error(tmp_path):
     assert any("컨텍스트 미설정" in m for m in sent)
 
 
-def test_remote_unknown_repo_suggests(real_repo):
-    deps = _deps(registry={"ceph-api": real_repo})
+def test_remote_set_changes_context_remote(tmp_path, real_repo):
+    """`remote 306` (registry 에 없는 이름) → 컨텍스트의 remote set."""
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="ceph-api", remote="305"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
     sent, say = _record_say()
-    handle_message(text="remote cef-api", user_id=ALLOWED, say=say, deps=deps)
-    assert any("모르는 repo" in m for m in sent)
+    handle_message(text="remote 306", user_id=ALLOWED, say=say, deps=deps)
+    assert store.get().remote == "306"
+    assert any("remote 변경" in m and "306" in m for m in sent)
+
+
+def test_remote_set_preserves_branch_and_who(tmp_path, real_repo):
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="ceph-api", remote="305", branch="develop", who="hjpark"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+    sent, say = _record_say()
+    handle_message(text="remote 306", user_id=ALLOWED, say=say, deps=deps)
+    ctx = store.get()
+    assert ctx.remote == "306"
+    assert ctx.branch == "develop"
+    assert ctx.who == "hjpark"
+    assert any("branch `develop` 유지" in m for m in sent)
+
+
+def test_remote_set_rejects_unknown_remote_name(tmp_path, real_repo):
+    """git remote 에 없는 이름 → 에러 + 사용 가능 목록."""
+    from bot_lib.context import Context, ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    store.set(Context(repo="ceph-api", remote="305"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+    sent, say = _record_say()
+    handle_message(text="remote 999", user_id=ALLOWED, say=say, deps=deps)
+    msg = sent[0]
+    assert "remote `999` 없음" in msg
+    assert "305" in msg and "306" in msg
+    # context unchanged
+    assert store.get().remote == "305"
+
+
+def test_remote_set_without_context_returns_error(tmp_path, real_repo):
+    """컨텍스트 없으면 set 못 함 — init 안내."""
+    from bot_lib.context import ContextStore
+    store = ContextStore(str(tmp_path / "ctx.json"))
+    deps = _deps(registry={"ceph-api": real_repo}, context=store)
+    sent, say = _record_say()
+    handle_message(text="remote 306", user_id=ALLOWED, say=say, deps=deps)
+    assert any("컨텍스트 미설정" in m and "init" in m for m in sent)
+    assert store.get() is None
 
 
 def test_remote_repo_without_remotes(tmp_path):
