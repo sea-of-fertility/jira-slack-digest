@@ -14,9 +14,9 @@
 
 ---
 
-## 1. 사용자에게 받아야 하는 필수 입력 (5개)
+## 1. 사용자에게 받아야 하는 필수 입력 (6개)
 
-아래 다섯 값만 받으면 나머지는 전부 AI가 세팅합니다. 하나라도 비면 단계 진행 불가.
+아래 여섯 값만 받으면 나머지는 전부 AI가 세팅합니다. 하나라도 비면 단계 진행 불가.
 
 | 키 | 예시 | 얻는 법 |
 |---|---|---|
@@ -24,9 +24,36 @@
 | `JIRA_EMAIL` | `you@company.com` | Jira 로그인 이메일(표시 이름 아님). |
 | `JIRA_API_TOKEN` | `ATATT3xFf...` | https://id.atlassian.com/manage-profile/security/api-tokens → Create API token |
 | `SLACK_BOT_TOKEN` | `xoxb-123-456-...` | https://api.slack.com/apps → 앱 생성 → OAuth & Permissions → `chat:write`, `im:write` → Install → Bot User OAuth Token |
+| `SLACK_APP_TOKEN` | `xapp-1-...` | https://api.slack.com/apps → 해당 앱 → **Basic Information** → Scroll down to **App-Level Tokens** → Generate Token and Scopes → scope `connections:write` 추가 → Generate. Socket Mode (`bot.py`) 전용. |
 | `SLACK_USER_ID` | `U01ABC23DEF` | Slack에서 본인 프로필 → 점 세 개 메뉴 → Copy member ID |
 
-AI는 위 다섯 값을 사용자에게 한 번에 요청하되, `JIRA_API_TOKEN`·`SLACK_BOT_TOKEN`은 **입력 즉시 메모리에서만 다룰 것** (터미널 스크롤백에 남지 않게).
+AI는 위 여섯 값을 사용자에게 한 번에 요청하되, `JIRA_API_TOKEN`·`SLACK_BOT_TOKEN`·`SLACK_APP_TOKEN`은 **입력 즉시 메모리에서만 다룰 것** (터미널 스크롤백에 남지 않게).
+
+### 1.1 Slack App 추가 설정 (Socket Mode / DM 수신용)
+
+`bot.py` 가 Slack DM·Slash command 를 수신하려면 https://api.slack.com/apps → 해당 앱 화면에서 아래 항목들을 **반드시 활성화**해야 함. AI는 사용자에게 체크리스트로 안내하고, 각 항목 완료 여부를 한 줄씩 확인.
+
+1. **Socket Mode 활성화**
+   - 좌측 메뉴 → **Socket Mode** → Enable Socket Mode 토글 ON
+   - (App-Level Token 미생성 시 위 1번 표 안내대로 먼저 생성)
+
+2. **App Home → Messages Tab 활성화**
+   - 좌측 메뉴 → **App Home** → **Show Tabs** 섹션
+   - **Messages Tab** 토글 ON
+   - 그 아래 체크박스 **"Allow users to send Slash commands and messages from the messages tab"** 도 반드시 체크 ✅
+   - (이 체크가 없으면 사용자가 봇 DM 입력창에 메시지를 못 씀 → 명령 입력 자체가 불가)
+
+3. **Event Subscriptions 활성화**
+   - 좌측 메뉴 → **Event Subscriptions** → Enable Events 토글 ON
+   - **Subscribe to bot events** 에 최소: `message.im` (DM 수신), `app_mention` (멘션 수신) 추가
+   - Socket Mode 사용 중이므로 Request URL 입력란은 무시 (회색으로 비활성)
+   - 저장 후 페이지 상단에 **"reinstall your app"** 배너가 뜨면 클릭하여 재설치 (스코프 갱신 반영)
+
+4. **Slash Commands** (선택, `/run` 등 슬래시 명령 쓸 때)
+   - 좌측 메뉴 → **Slash Commands** → Create New Command 로 등록
+   - Socket Mode 이므로 Request URL 은 비워둬도 OK
+
+검증: 위 4개 (또는 슬래시 명령 미사용 시 3개) 항목이 모두 ON 상태인지 사용자에게 스크린 한번 확인 요청. 누락 시 `bot.py` 실행해도 메시지가 도착하지 않음.
 
 ---
 
@@ -70,6 +97,7 @@ JIRA_BASE_URL=<받은 값, 끝 슬래시 제거>
 JIRA_EMAIL=<받은 값>
 JIRA_API_TOKEN=<받은 값>
 SLACK_BOT_TOKEN=<받은 값>
+SLACK_APP_TOKEN=<받은 값>     # bot.py Socket Mode 용
 SLACK_USER_ID=<받은 값>
 
 # 아래는 기본값
@@ -186,8 +214,9 @@ curl -s "https://slack.com/api/chat.getPermalink?channel=<반환된 channel>&mes
 
 ## 10. 정리 체크리스트 (AI가 마지막에 사용자에게 보고)
 
-- [ ] `.env` 생성 완료 (파일 존재·따옴표 OK)
+- [ ] `.env` 생성 완료 (파일 존재·따옴표 OK, `SLACK_APP_TOKEN` 포함)
 - [ ] `.gitignore` 에 `.env` 포함 확인
+- [ ] Slack App: Socket Mode ON / Messages Tab ON + "Allow users to send..." 체크 / Event Subscriptions ON (`message.im`, `app_mention`)
 - [ ] `python3 -m venv .venv` + `pip install -r requirements.txt` 완료
 - [ ] dry-run 3종 통과 (mock/no-llm, mock/cli, real/dry-run)
 - [ ] 실제 발송 1회 성공, permalink 확인

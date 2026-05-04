@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+from bot_lib import jira_client
 from bot_lib.cancellation import CancellationRegistry
 from bot_lib.context import ContextStore
 from bot_lib.registry import RegistryError, load_registry
@@ -47,15 +48,31 @@ def main() -> None:
     env_bot_user = os.environ.get("BOT_USER") or None  # optional
     cancel_registry = CancellationRegistry()
 
+    jira_base_url = _require("JIRA_BASE_URL")
+    jira_email = _require("JIRA_EMAIL")
+    jira_token = _require("JIRA_API_TOKEN")
+
+    try:
+        bot_account_id = jira_client.get_my_account_id(
+            jira_base_url, jira_email, jira_token,
+        )
+    except Exception as e:
+        sys.stderr.write(
+            f"[warn] /myself 조회 실패 — assignee 미설정으로 진행: "
+            f"{type(e).__name__}: {e}\n"
+        )
+        bot_account_id = None
+
     deps = HandlerDeps(
         allowed_user_id=_require("SLACK_USER_ID"),
         registry=registry,
-        jira_base_url=_require("JIRA_BASE_URL"),
-        jira_email=_require("JIRA_EMAIL"),
-        jira_token=_require("JIRA_API_TOKEN"),
+        jira_base_url=jira_base_url,
+        jira_email=jira_email,
+        jira_token=jira_token,
         context=context,
         env_bot_user=env_bot_user,
         cancel_registry=cancel_registry,
+        bot_account_id=bot_account_id,
     )
 
     app = App(token=_require("SLACK_BOT_TOKEN"))
@@ -74,9 +91,11 @@ def main() -> None:
     who_str = (
         (ctx_now.who if ctx_now and ctx_now.who else env_bot_user) or "(unset)"
     )
+    assignee_str = bot_account_id or "(unset)"
     sys.stderr.write(
         f"[info] bot online — {len(registry)} project(s) registered: "
-        f"{', '.join(sorted(registry))} | context: {ctx_str} | who: {who_str}\n"
+        f"{', '.join(sorted(registry))} | context: {ctx_str} | who: {who_str} "
+        f"| assignee: {assignee_str}\n"
     )
     SocketModeHandler(app, _require("SLACK_APP_TOKEN")).start()
 

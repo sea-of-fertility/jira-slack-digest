@@ -4,7 +4,7 @@ import shlex
 from dataclasses import dataclass, field, replace
 from typing import Callable, Mapping, Optional
 
-from bot_lib import commands, git_ops, orchestrator
+from bot_lib import commands, git_ops, jira_client, orchestrator
 from bot_lib.cancellation import CancellationRegistry
 from bot_lib.context import Context, ContextStore
 from bot_lib.mutex import RepoMutex
@@ -21,6 +21,14 @@ HELP_TEXT = (
     "  예:\n"
     "    run fix CDS-99\n"
     "    run fix CDS-99 -d controller 만 수정. service 는 두기.\n\n"
+    "이슈 생성 (jira create):\n"
+    "  jira create -k <분류> -t <제목> [-d <본문>]\n"
+    "    -k: 에픽 | 작업 | 버그 | 스토리 (또는 Epic/Task/Bug/Story)\n"
+    "    -t: 제목 (다음 -k/-d 만나기 전까지 그리디)\n"
+    "    -d: 본문 (그리디, 마지막)\n"
+    "  예:\n"
+    "    jira create -k 작업 -t API 개선 검토\n"
+    "    jira create -k 버그 -t 로그인 실패 -d Chrome 120 이상에서 재현\n\n"
     "컨텍스트 (CLI 플래그):\n"
     "  init <repo>                       - 컨텍스트 set (remote·branch는 projects.md default)\n"
     "  init <repo> -r <remote>           - + remote override\n"
@@ -74,6 +82,8 @@ class HandlerDeps:
     context: Optional[ContextStore] = None
     env_bot_user: Optional[str] = None   # fallback when context.who is None
     cancel_registry: Optional[CancellationRegistry] = None
+    create_issue: Callable[..., jira_client.JiraCreatedIssue] = jira_client.create_issue
+    bot_account_id: Optional[str] = None   # Jira accountId of the API token owner
 
 
 def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> None:
@@ -97,6 +107,11 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
     # §B status
     if stripped == "status":
         _handle_status(deps, say)
+        return
+
+    # jira create -k <kind> -t <title> [-d <body>] [-p <PROJECT>]
+    if commands.is_create(stripped):
+        _handle_jira_create(text, deps, say)
         return
 
     # §B init <repo> [-r remote] [-b branch]
@@ -209,6 +224,37 @@ def _run_with_mutex(cmd, project: Project, deps: HandlerDeps, say: Say, *, who: 
         say(format_outcome(outcome))
     finally:
         lock.release()
+
+
+# ---- jira create ----
+
+
+def _handle_jira_create(text: str, deps: HandlerDeps, say: Say) -> None:
+    try:
+        parsed = commands.parse_create(text)
+    except commands.CommandError as e:
+        say(f"❌ {e}")
+        return
+
+    try:
+        created = deps.create_issue(
+            base_url=deps.jira_base_url,
+            email=deps.jira_email,
+            token=deps.jira_token,
+            issuetype=parsed.kind,
+            summary=parsed.title,
+            description=parsed.description or "",
+            assignee_account_id=deps.bot_account_id,
+        )
+    except Exception as e:
+        say(f"❌ Jira 생성 실패: {type(e).__name__}: {e}")
+        return
+
+    say(
+        f"✅ 이슈 생성 — <{created.url}|{created.key}>\n"
+        f"  분류: {parsed.kind}\n"
+        f"  제목: {parsed.title}"
+    )
 
 
 # ---- init / status / clear (§B) ----

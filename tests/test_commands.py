@@ -1,6 +1,13 @@
 import pytest
 
-from bot_lib.commands import CommandError, is_help, parse
+from bot_lib.commands import (
+    CommandError,
+    ParsedCreate,
+    is_create,
+    is_help,
+    parse,
+    parse_create,
+)
 
 
 # ---- run form happy path ----
@@ -113,3 +120,111 @@ def test_is_help_true(text):
 )
 def test_is_help_false(text):
     assert is_help(text) is False
+
+
+# ---- jira create — parse_create ----
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "jira create",
+        "jira create -k 작업 -t 제목",
+        "  jira create  -k 작업 -t 제목 ",
+    ],
+)
+def test_is_create_true(text):
+    assert is_create(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "create -k 작업 -t 제목", "jira", "jiracreate -k 작업", "run fix CDS-99"],
+)
+def test_is_create_false(text):
+    assert is_create(text) is False
+
+
+def test_parse_create_minimal():
+    p = parse_create("jira create -k 작업 -t API 개선")
+    assert isinstance(p, ParsedCreate)
+    assert p.kind == "Task"
+    assert p.title == "API 개선"
+    assert p.description is None
+
+
+@pytest.mark.parametrize(
+    "ko, en",
+    [("에픽", "Epic"), ("작업", "Task"), ("버그", "Bug"), ("스토리", "Story")],
+)
+def test_parse_create_korean_kind_maps_to_canonical(ko, en):
+    assert parse_create(f"jira create -k {ko} -t 제목").kind == en
+
+
+@pytest.mark.parametrize(
+    "raw, en",
+    [("Epic", "Epic"), ("epic", "Epic"), ("BUG", "Bug"), ("Story", "Story")],
+)
+def test_parse_create_english_kind_case_insensitive(raw, en):
+    assert parse_create(f"jira create -k {raw} -t 제목").kind == en
+
+
+def test_parse_create_with_description_greedy():
+    p = parse_create(
+        "jira create -k 버그 -t 로그인 실패 -d Chrome 120 이상에서 재현됨"
+    )
+    assert p.kind == "Bug"
+    assert p.title == "로그인 실패"
+    assert p.description == "Chrome 120 이상에서 재현됨"
+
+
+def test_parse_create_title_greedy_until_next_flag():
+    p = parse_create("jira create -t API v2 설계 문서 리뷰 -k 스토리")
+    assert p.title == "API v2 설계 문서 리뷰"
+    assert p.kind == "Story"
+
+
+def test_parse_create_dash_d_preserves_special_chars():
+    p = parse_create("jira create -k 작업 -t 제목 -d /api/v2 — IOException")
+    assert p.description == "/api/v2 — IOException"
+
+
+def test_parse_create_dash_d_multiline():
+    p = parse_create("jira create -k 작업 -t 제목 -d line1\nline2\nline3")
+    assert p.description == "line1\nline2\nline3"
+
+
+def test_parse_create_empty_dash_d_treated_as_none():
+    p = parse_create("jira create -k 작업 -t 제목 -d ")
+    assert p.description is None
+
+
+def test_parse_create_rejects_missing_kind():
+    with pytest.raises(CommandError, match="`-k` 필수"):
+        parse_create("jira create -t 제목만")
+
+
+def test_parse_create_rejects_missing_title():
+    with pytest.raises(CommandError, match="`-t` 필수"):
+        parse_create("jira create -k 작업")
+
+
+def test_parse_create_rejects_unsupported_kind():
+    with pytest.raises(CommandError, match="지원 분류"):
+        parse_create("jira create -k 핫픽스 -t 제목")
+
+
+def test_parse_create_rejects_dangling_flag_value():
+    with pytest.raises(CommandError, match="-k.*값"):
+        parse_create("jira create -k")
+
+
+def test_parse_create_rejects_unknown_token_before_flags():
+    with pytest.raises(CommandError, match="인식 못한 토큰"):
+        parse_create("jira create extra -k 작업 -t 제목")
+
+
+def test_parse_create_rejects_dash_p_as_unknown():
+    """-p was removed; bare `-p` outside title-capture is not recognized."""
+    with pytest.raises(CommandError, match="인식 못한 토큰"):
+        parse_create("jira create -p OTHER -k 작업 -t 제목")

@@ -55,9 +55,11 @@ def _stub_execute(outcome=None):
     return calls, fake
 
 
-def _deps(execute=None, registry=None, context=None):
+def _deps(
+    execute=None, registry=None, context=None, create_issue=None,
+):
     from bot_lib.context import ContextStore
-    return HandlerDeps(
+    deps = HandlerDeps(
         allowed_user_id=ALLOWED,
         registry={"myrepo": _project()} if registry is None else registry,
         jira_base_url="https://x.atlassian.net",
@@ -66,6 +68,9 @@ def _deps(execute=None, registry=None, context=None):
         execute=execute or (lambda *a, **kw: None),
         context=context,
     )
+    if create_issue is not None:
+        deps.create_issue = create_issue
+    return deps
 
 
 def _ctx_store(tmp_path, repo="myrepo", remote="origin", branch=None):
@@ -1177,3 +1182,114 @@ def test_cleanup_acquires_mutex(repo_dirty):
 
     # cleanup eventually ran
     assert any("초기화 완료" in m for m in s2)
+
+
+# ---- jira create ----
+
+
+def _stub_create_issue(key="CDS-321", url=None):
+    from bot_lib.jira_client import JiraCreatedIssue
+
+    calls = []
+
+    def fake(**kwargs):
+        calls.append(kwargs)
+        return JiraCreatedIssue(
+            key=key,
+            url=url or f"https://x.atlassian.net/browse/{key}",
+        )
+
+    return calls, fake
+
+
+def test_jira_create_minimal_invokes_api_and_replies():
+    calls, fake = _stub_create_issue(key="CDS-1")
+    sent, say = _record_say()
+    handle_message(
+        text="jira create -k 작업 -t API 개선 검토",
+        user_id=ALLOWED, say=say,
+        deps=_deps(create_issue=fake),
+    )
+    assert len(calls) == 1
+    # No project_key passed → jira_client uses DEFAULT_PROJECT
+    assert "project_key" not in calls[0]
+    assert calls[0]["issuetype"] == "Task"
+    assert calls[0]["summary"] == "API 개선 검토"
+    assert calls[0]["description"] == ""
+    # default deps has bot_account_id=None → forwarded as None
+    assert calls[0]["assignee_account_id"] is None
+    assert any("✅ 이슈 생성" in m and "CDS-1" in m for m in sent)
+
+
+def test_jira_create_forwards_bot_account_id_as_assignee():
+    calls, fake = _stub_create_issue(key="CDS-9")
+    sent, say = _record_say()
+    deps = _deps(create_issue=fake)
+    deps.bot_account_id = "acc-bot"
+    handle_message(
+        text="jira create -k 작업 -t 제목",
+        user_id=ALLOWED, say=say, deps=deps,
+    )
+    assert calls[0]["assignee_account_id"] == "acc-bot"
+
+
+def test_jira_create_passes_description():
+    calls, fake = _stub_create_issue()
+    sent, say = _record_say()
+    handle_message(
+        text="jira create -k 작업 -t 제목 -d 본문 — 상세",
+        user_id=ALLOWED, say=say,
+        deps=_deps(create_issue=fake),
+    )
+    assert calls[0]["description"] == "본문 — 상세"
+
+
+def test_jira_create_parse_error_replies_with_message():
+    calls, fake = _stub_create_issue()
+    sent, say = _record_say()
+    handle_message(
+        text="jira create -t 제목만",  # missing -k
+        user_id=ALLOWED, say=say,
+        deps=_deps(create_issue=fake),
+    )
+    assert calls == []
+    assert any("`-k` 필수" in m for m in sent)
+
+
+def test_jira_create_api_error_replies_with_message():
+    sent, say = _record_say()
+
+    def fail(**kwargs):
+        raise RuntimeError("HTTP 400 boom")
+
+    handle_message(
+        text="jira create -k 작업 -t 제목",
+        user_id=ALLOWED, say=say,
+        deps=_deps(create_issue=fail),
+    )
+    assert any("Jira 생성 실패" in m and "HTTP 400 boom" in m for m in sent)
+
+
+def test_jira_create_reply_omits_project_line():
+    """Response should be 3 lines: title / kind / summary — no project label."""
+    calls, fake = _stub_create_issue(key="CDS-2")
+    sent, say = _record_say()
+    handle_message(
+        text="jira create -k 작업 -t 제목",
+        user_id=ALLOWED, say=say,
+        deps=_deps(create_issue=fake),
+    )
+    success = next(m for m in sent if "✅" in m)
+    assert "프로젝트" not in success
+
+
+def test_jira_create_unauthorized_user_silently_ignored():
+    calls, fake = _stub_create_issue()
+    sent, say = _record_say()
+    handle_message(
+        text="jira create -k 작업 -t 제목",
+        user_id="UOTHER", say=say,
+        deps=_deps(create_issue=fake),
+    )
+    assert calls == []
+    assert sent == []
