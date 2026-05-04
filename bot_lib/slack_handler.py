@@ -188,7 +188,7 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
         say(_unknown_repo_message(cmd.repo, deps.registry))
         return
 
-    # 3토큰 경로에서는 컨텍스트가 projects.md default 를 덮어씀
+    # 컨텍스트가 projects.md 의 default 를 덮어씀
     if repo_remote_override and repo_remote_override != project.remote:
         project = replace(project, remote=repo_remote_override)
     if branch_override and branch_override != project.default_branch:
@@ -356,7 +356,7 @@ def _handle_init_command(text: str, deps: HandlerDeps, say: Say) -> None:
         f"✅ 컨텍스트 설정: `{args.repo}`\n"
         f"  remote: `{resolved_remote}`\n"
         f"  branch: `{branch_label}`\n"
-        f"이후 3토큰 명령 가능: `<type>/<issue>/<instruction>`"
+        f"이후 `run <type> <issue> [-d <지시문>]` 사용 가능"
     )
 
 
@@ -365,7 +365,7 @@ def _handle_init_clear(deps: HandlerDeps, say: Say) -> None:
         say("⚠️ 컨텍스트 저장소 미설정.")
         return
     deps.context.clear()
-    say("✅ 컨텍스트 삭제됨. 4토큰 형식만 사용 가능.")
+    say("✅ 컨텍스트 삭제됨. `run` 명령 사용 전 `init <repo>` 로 다시 설정하세요.")
 
 
 def _handle_status(deps: HandlerDeps, say: Say) -> None:
@@ -378,7 +378,10 @@ def _handle_status(deps: HandlerDeps, say: Say) -> None:
     repo_block = "\n".join(repo_lines) if repo_lines else "  (없음)"
 
     if ctx is None:
-        say(f"현재 컨텍스트: *없음* (4토큰 형식 사용)\n등록된 repo:\n{repo_block}")
+        say(
+            f"현재 컨텍스트: *없음* — `run` 사용 전 `init <repo>` 필요\n"
+            f"등록된 repo:\n{repo_block}"
+        )
     else:
         say(
             f"현재 컨텍스트: `{ctx.repo}` / `{ctx.remote}`\n"
