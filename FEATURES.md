@@ -158,9 +158,9 @@ cleanup ceph-api                 ← 부분 편집 정리
 ## 7. 상주화
 
 ```
-launchd plist : ~/Library/LaunchAgents/com.hjpark.jira-bot.plist
+launchd plist : ~/Library/LaunchAgents/local.jira-bot.plist
 로그          : ~/Library/Logs/jira-bot.log + jira-bot.err.log
-재기동        : launchctl kickstart -k gui/$(id -u)/com.hjpark.jira-bot
+재기동        : launchctl kickstart -k gui/$(id -u)/local.jira-bot
 ```
 
 자세한 절차는 [`launchd/README.md`](./launchd/README.md).

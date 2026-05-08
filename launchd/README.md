@@ -1,6 +1,6 @@
 # launchd setup (Step 13)
 
-`com.hjpark.jira-bot.plist` is a macOS LaunchAgent that supervises the
+`local.jira-bot.plist` is a macOS LaunchAgent that supervises the
 `jira-bot` console script (defined in `pyproject.toml`, calls `bot:main`)
 per plan.md §11:
 
@@ -15,8 +15,8 @@ per plan.md §11:
 ## Install
 
 ```sh
-cp launchd/com.hjpark.jira-bot.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hjpark.jira-bot.plist
+cp launchd/local.jira-bot.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.jira-bot.plist
 ```
 
 `bootstrap` both registers and starts the agent. After this, the bot is
@@ -30,17 +30,17 @@ tail -f ~/Library/Logs/jira-bot.log
 
 ```sh
 # Status
-launchctl print gui/$(id -u)/com.hjpark.jira-bot | head -20
+launchctl print gui/$(id -u)/local.jira-bot | head -20
 
 # Restart (after .env or projects.md changes)
-launchctl kickstart -k gui/$(id -u)/com.hjpark.jira-bot
+launchctl kickstart -k gui/$(id -u)/local.jira-bot
 
 # Stop temporarily
-launchctl bootout gui/$(id -u)/com.hjpark.jira-bot
+launchctl bootout gui/$(id -u)/local.jira-bot
 
 # Permanently remove
-launchctl bootout gui/$(id -u)/com.hjpark.jira-bot
-rm ~/Library/LaunchAgents/com.hjpark.jira-bot.plist
+launchctl bootout gui/$(id -u)/local.jira-bot
+rm ~/Library/LaunchAgents/local.jira-bot.plist
 ```
 
 ## Notes

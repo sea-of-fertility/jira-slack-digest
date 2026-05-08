@@ -219,10 +219,10 @@ jira-bot --setup
 
 ```bash
 # plist 위치
-~/Library/LaunchAgents/com.hjpark.jira-bot.plist
+~/Library/LaunchAgents/local.jira-bot.plist
 
 # 코드 변경 후 재기동
-launchctl kickstart -k gui/$(id -u)/com.hjpark.jira-bot
+launchctl kickstart -k gui/$(id -u)/local.jira-bot
 
 # 로그
 ~/Library/Logs/jira-bot.log
@@ -271,7 +271,7 @@ projects.toml            # 봇이 다룰 repo 등록 (TOML, 한 섹션 = 한 rep
 plan.md                  # 봇 설계 의도·결정사항
 FEATURES.md              # 봇 기능 정의서·명령 카탈로그
 AGENTS.md                # AI 에이전트용 자동 setup 가이드
-launchd/                 # com.hjpark.jira-bot.plist 예시 + README
+launchd/                 # local.jira-bot.plist 예시 + README
 .env.example             # 환경 변수 템플릿 (디지스트 + 봇 공용)
 pyproject.toml           # 패키지 메타데이터 + 의존성 + 콘솔 스크립트 (`jira-bot`, `jira-digest`)
 tests/                   # pytest 385건 (live 마커 1건 opt-in)
