@@ -428,7 +428,7 @@ def require_env(name: str) -> str:
     return v
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Print payload, do not send to Slack.")
     parser.add_argument("--mock", action="store_true", help="Use built-in mock data (no Jira call).")
@@ -439,7 +439,7 @@ def main() -> None:
         help="Summarization backend. 'auto' picks cli > api > none based on what's available.",
     )
     parser.add_argument("--no-llm", action="store_true", help="Alias for --backend none.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.mock:
         base_url = os.environ.get("JIRA_BASE_URL", "https://example.atlassian.net")

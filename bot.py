@@ -2,15 +2,16 @@
 """Slack DM bot — plan.md §3 entry point.
 
 Loads env + projects.toml, wires slack_bolt Socket Mode, delegates each
-DM to bot_lib.slack_handler.handle_message. Run via `jira-bot` for the
-local PoC; in production the launchd plist (Step 13) supervises it.
+DM to bot_lib.slack_handler.handle_message. Invoked via `jira bot`
+(or just `jira`, which defaults to the bot subcommand); launchd runs it
+via the same `jira bot` argv.
 
 Startup: when required env keys are missing, projects.toml has no
 entries, or any token fails a live `/myself` / `auth.test` probe, the
 interactive setup wizard launches automatically (TTY only) and the bot
 then keeps running in the same process — no manual restart needed.
 Non-TTY (launchd) exits with status 2 so the user can run
-`jira-bot --setup`. Pass `--setup` to force the wizard and exit
+`jira setup`. Pass `--setup` to force the wizard and exit
 (no bot startup).
 """
 from __future__ import annotations
@@ -49,13 +50,13 @@ def _load_registry_or_empty(path: Path) -> dict:
         return {}
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--setup", action="store_true",
         help="설정 wizard 강제 실행 (.env / projects.toml 편집)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     here = Path(__file__).resolve().parent
     env_path = here / ".env"
@@ -70,14 +71,15 @@ def main() -> None:
             sys.stderr.write(
                 "[error] 누락 설정이 있는데 비대화 환경입니다 "
                 f"(env 누락: {missing or '없음'}, repo 등록: {len(registry)}건).\n"
-                "터미널에서 `jira-bot --setup` 을 실행해 주세요.\n"
+                "터미널에서 `jira setup` 을 실행해 주세요.\n"
             )
             sys.exit(2)
         setup_wizard.run(env_path, projects_path, force=args.setup)
         if args.setup:
             sys.stderr.write(
                 "[info] setup 완료 — 봇 재시작은 launchd 가 처리합니다 "
-                "(`launchctl kickstart -k gui/$UID/local.jira-bot`).\n"
+                "(`launchctl kickstart -k gui/$UID/local.jira-bot`)\n"
+                "또는 `jira install` 로 재설치.\n"
             )
             sys.exit(0)
         load_dotenv(env_path, override=True)
@@ -100,7 +102,7 @@ def main() -> None:
             sys.stderr.write(f"  - {key}: {msg}\n")
         if not sys.stdin.isatty():
             sys.stderr.write(
-                "터미널에서 `jira-bot --setup` 을 실행해 주세요.\n"
+                "터미널에서 `jira setup` 을 실행해 주세요.\n"
             )
             sys.exit(2)
         setup_wizard.run(

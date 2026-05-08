@@ -7,7 +7,8 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/hyungjunpark/dev/jira-slack-digest/.venv/bin/jira-bot</string>
+        <string>/Users/hyungjunpark/dev/jira-slack-digest/.venv/bin/jira</string>
+        <string>bot</string>
     </array>
 
     <key>WorkingDirectory</key>

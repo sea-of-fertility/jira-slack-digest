@@ -9,7 +9,7 @@
 
 봇의 명령 카탈로그·동작은 [`FEATURES.md`](./FEATURES.md), 설계 의도는 [`plan.md`](./plan.md), AI 자동 세팅 가이드는 [`AGENTS.md`](./AGENTS.md) 참조.
 
-> **⚡ 빠른 setup** — 디지스트만 쓰든 봇까지 쓰든, `.venv` 활성화 + `pip install -e .` 후 그냥 `jira-bot` 만 실행하면 끝납니다. 매 기동마다 `.env` 의 토큰을 Jira `/myself` · Slack `auth.test` 로 라이브 검증하고, 누락이거나 만료됐으면 그 키만 인터랙티브 wizard 가 다시 묻고 (시크릿은 `getpass` 마스킹), 그대로 봇이 돌기 시작합니다. 수동으로 하려면 아래 1~5장을 순서대로 따라가세요.
+> **⚡ 빠른 setup** — 디지스트만 쓰든 봇까지 쓰든, `.venv` 활성화 + `pip install -e .` 후 그냥 `jira` 만 치면 끝납니다 (= `jira bot`). 매 기동마다 `.env` 의 토큰을 Jira `/myself` · Slack `auth.test` 로 라이브 검증하고, 누락이거나 만료됐으면 그 키만 인터랙티브 wizard 가 다시 묻고 (시크릿은 `getpass` 마스킹), 그대로 봇이 돌기 시작합니다. 수동으로 하려면 아래 1~5장을 순서대로 따라가세요.
 
 ---
 
@@ -100,26 +100,26 @@ Haiku 기준 이슈 20건이어도 하루 약 1~2센트 수준입니다.
 cd <이 폴더>
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .              # 봇·디지스트 + 의존성 설치, `jira-bot` / `jira-digest` 콘솔 스크립트 등록
+pip install -e .              # 봇·디지스트 + 의존성 설치, `jira` 콘솔 스크립트 등록
 # pip install -e ".[dev]"     # 테스트도 돌릴 거면 (pytest 포함)
 
 cp .env.example .env
-# .env 파일을 열어 실제 값으로 교체  (또는 `jira-bot --setup` 으로 wizard 사용)
+# .env 파일을 열어 실제 값으로 교체  (또는 `jira setup` 으로 wizard 사용)
 
 # 환경 변수 로드
 set -a; source .env; set +a
 
 # mock 데이터 + 요약 스킵 → 완전 오프라인, 블록 구조만 확인
-jira-digest --mock --dry-run --no-llm
+jira digest --mock --dry-run --no-llm
 
 # mock 데이터 + CLI 요약 테스트 (Slack 안 보냄)
-jira-digest --mock --dry-run --backend cli
+jira digest --mock --dry-run --backend cli
 
 # 실제 Jira 조회 + 요약까지 하되 Slack 안 보내고 페이로드만 출력
-jira-digest --dry-run
+jira digest --dry-run
 
 # 진짜 실행 (Slack DM 전송)
-jira-digest
+jira digest
 ```
 
 ## 5. 매일 아침 9시에 자동 실행 (cron)
@@ -128,7 +128,7 @@ jira-digest
 
 ```cron
 # 평일 오전 9:00 Jira digest
-0 9 * * 1-5 /absolute/path/to/.venv/bin/jira-digest >> /absolute/path/to/digest.log 2>&1
+0 9 * * 1-5 /absolute/path/to/.venv/bin/jira digest >> /absolute/path/to/digest.log 2>&1
 ```
 
 환경 변수는 cron이 기본적으로 읽어주지 않으니, 두 가지 중 하나:
@@ -141,7 +141,7 @@ jira-digest
 set -euo pipefail
 cd "$(dirname "$0")"
 set -a; source .env; set +a
-./.venv/bin/jira-digest
+./.venv/bin/jira digest
 ```
 
 ```bash
@@ -156,7 +156,7 @@ crontab:
 **방법 B — crontab 안에 직접 export**
 
 ```cron
-0 9 * * 1-5 JIRA_BASE_URL=https://... JIRA_EMAIL=... JIRA_API_TOKEN=... SLACK_BOT_TOKEN=xoxb-... SLACK_USER_ID=U... /path/.venv/bin/jira-digest
+0 9 * * 1-5 JIRA_BASE_URL=https://... JIRA_EMAIL=... JIRA_API_TOKEN=... SLACK_BOT_TOKEN=xoxb-... SLACK_USER_ID=U... /path/.venv/bin/jira digest
 ```
 
 ### macOS에서 맥이 자고 있어도 실행되게 하려면
@@ -188,15 +188,27 @@ cron은 잠든 맥에서는 안 뜹니다. 필요하면 `launchd`로 감싸거�
 source .venv/bin/activate
 
 # 2) 봇 실행 — 한 명령으로 검증 → (필요 시) 입력 → 실행이 한 번에 끝남
-jira-bot
+jira             # = `jira bot` (기본 동작)
 #  → .env 누락/잘못된 토큰이 있으면 그 키만 wizard 가 묻고, 입력 후 그대로 봇이 시작됩니다.
 #  → 모두 유효하면 즉시 Socket Mode 진입.
 
 # (선택) wizard 만 돌리고 끝내고 싶을 때 — launchd 가 봇 재기동
-jira-bot --setup
+jira setup
 ```
 
-> **토큰 라이브 검증** — 매 기동마다 Jira `GET /rest/api/3/myself`, Slack `auth.test` 를 호출해 401/`invalid_auth` 를 잡습니다. `SLACK_APP_TOKEN` (`xapp-…`)·`SLACK_USER_ID` (`U…`) 는 호출 가능한 검증 엔드포인트가 없어 형식만 검사합니다. 비대화 환경(launchd) 에서 검증 실패 시 stderr 에 어느 키가 어떤 이유로 거부됐는지 찍고 exit 2 — 터미널에서 `jira-bot --setup` 으로 갱신.
+`jira` 한 명령에 모든 동작이 subcommand 로 모입니다:
+
+| 명령 | 동작 |
+|---|---|
+| `jira` 또는 `jira bot` | Slack DM 봇 시작 (기본) |
+| `jira setup` | 설정 wizard 단독 실행 |
+| `jira validate` | 토큰 라이브 검증만, 결과 출력 후 종료 |
+| `jira status` | launchd 상태 + .env 키 마스킹 + projects.toml 요약 |
+| `jira install` / `uninstall` | launchd plist 복사·bootstrap / 해제 |
+| `jira logs [-f] [--err]` | `~/Library/Logs/jira-bot{,.err}.log` tail |
+| `jira digest [...]` | Daily digest 1회 (cron 에서도 사용) |
+
+> **토큰 라이브 검증** — 매 기동마다 Jira `GET /rest/api/3/myself`, Slack `auth.test` 를 호출해 401/`invalid_auth` 를 잡습니다. `SLACK_APP_TOKEN` (`xapp-…`)·`SLACK_USER_ID` (`U…`) 는 호출 가능한 검증 엔드포인트가 없어 형식만 검사합니다. 비대화 환경(launchd) 에서 검증 실패 시 stderr 에 어느 키가 어떤 이유로 거부됐는지 찍고 exit 2 — 터미널에서 `jira setup` 으로 갱신.
 
 ### 명령 카탈로그 (요약)
 
@@ -237,7 +249,7 @@ macOS 가 시스템 sleep 에 들어가면 launchd 봇도 정지됩니다. 외�
 
 - 시스템 설정 → 배터리 → 전원 어댑터 → "잠자기 방지" 체크
 - 클램쉘 모드 (외부 전원·디스플레이·키보드 연결 시 노트북 닫아도 깨어 있음)
-- 또는 `caffeinate -di .venv/bin/jira-bot` 형태로 foreground 실행
+- 또는 `caffeinate -di .venv/bin/jira bot` 형태로 foreground 실행
 
 ### 안전장치
 
@@ -273,7 +285,8 @@ FEATURES.md              # 봇 기능 정의서·명령 카탈로그
 AGENTS.md                # AI 에이전트용 자동 setup 가이드
 launchd/                 # local.jira-bot.plist 예시 + README
 .env.example             # 환경 변수 템플릿 (디지스트 + 봇 공용)
-pyproject.toml           # 패키지 메타데이터 + 의존성 + 콘솔 스크립트 (`jira-bot`, `jira-digest`)
+pyproject.toml           # 패키지 메타데이터 + 의존성 + 단일 콘솔 스크립트 (`jira`)
+jira_cli.py              # `jira <subcommand>` argparse 디스패처
 tests/                   # pytest 385건 (live 마커 1건 opt-in)
 ```
 

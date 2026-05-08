@@ -73,11 +73,11 @@ AI는 위 여섯 값을 사용자에게 한 번에 요청하되, `JIRA_API_TOKEN
 ## 3. 사전 점검
 
 ```bash
-python3 --version   # 3.10+
+python3 --version   # 3.11+
 which claude        # LLM_BACKEND=cli 를 쓸 때만 필요; 없으면 api/none 로 폴백 권장
 ```
 
-- `python3` 없으면 **중단** → 사용자에게 "Python 3.10+를 설치해 주세요"
+- `python3` < 3.11 이면 **중단** → 사용자에게 "Python 3.11+를 설치해 주세요" (`pyproject.toml` `requires-python = ">=3.11"`)
 - `claude` 없으면 `LLM_BACKEND=none` 로 내려서 진행 (요약만 생략, 동작은 OK)
 
 ---
@@ -87,26 +87,36 @@ which claude        # LLM_BACKEND=cli 를 쓸 때만 필요; 없으면 api/none 
 권장: 봇이 자체 wizard 를 띄우게 한다. 의존성 설치(§6) 후 사용자에게 다음을 안내:
 
 ```bash
-jira-bot
+jira
 ```
 
-처음 실행 시 `.env` 또는 `projects.toml` 가 비어 있으면 인터랙티브 wizard 가 시작되어 §1 의 6개 값 + (선택) repo 등록까지 한 화면에서 묻는다.
+봇은 매 기동마다 다음을 순서대로 수행한다 (`bot_lib/setup_wizard.py`).
+
+1. **누락 키 검사** — `.env` 또는 `projects.toml` 가 비어 있거나 §1 의 6개 키 중 하나라도 비어 있으면 wizard 진입.
+2. **라이브 토큰 검증** — 키가 모두 채워져 있어도 매 기동마다:
+   - Jira `GET /rest/api/3/myself` (HTTPBasicAuth)
+   - Slack `auth.test` (`SLACK_BOT_TOKEN`)
+   - `SLACK_APP_TOKEN` `xapp-` 접두사, `SLACK_USER_ID` `U` + 영숫자 형식
+   하나라도 실패하면 **그 키만** 골라서 wizard 가 다시 묻는다 (다른 멀쩡한 값은 그대로).
+3. **in-process 재기동** — wizard 입력이 끝나면 새 값을 메모리에 반영 후 그대로 봇이 가동된다 (사용자가 `jira` 재실행할 필요 없음).
+
+wizard 동작 원칙:
 
 - 시크릿(`*_TOKEN`, `*_API_KEY`) 입력은 `getpass` 로 마스킹 → 터미널·스크롤백 노출 없음
-- 입력값 echo 도 앞6/뒤4 마스킹
-- 작성된 `.env` 는 권한 600 으로 저장
+- 입력값 echo 도 앞6/뒤4 마스킹 (`xxxxxx…yyyy`)
+- 작성된 `.env` 는 atomic write (`tempfile + os.replace`) + 권한 600 으로 저장
 - 잘못된 입력(URL 형식, 이메일 `@` 누락 등)은 즉시 재요청
-- 이미 채워진 항목은 건드리지 않음
+- 이미 채워진 정상 항목은 건드리지 않음
 
 기존 값을 다시 편집하고 싶으면:
 
 ```bash
-jira-bot --setup
+jira setup
 ```
 
-(빈 입력으로 Enter 하면 기존 값 유지)
+(빈 입력으로 Enter 하면 기존 값 유지. wizard 종료 후 그대로 봇이 가동된다.)
 
-**주의**: launchd/systemd 처럼 stdin 이 TTY 가 아닌 환경에서는 wizard 가 뜰 수 없다. 누락 설정이 있으면 봇이 즉시 exit 2 로 종료하므로, 첫 setup 은 사용자가 **반드시 터미널에서 한 번** 실행해야 한다.
+**주의**: launchd/systemd 처럼 stdin 이 TTY 가 아닌 환경에서는 wizard 가 뜰 수 없다. 누락 설정이나 무효 토큰이 있으면 봇이 stderr 에 어느 키가 어떤 이유로 거부됐는지 찍고 즉시 `exit 2` 로 종료하므로, 첫 setup 과 토큰 갱신은 사용자가 **반드시 터미널에서 한 번** `jira setup` 으로 돌려야 한다.
 
 ### 4.1 (fallback) 수동으로 하고 싶다면
 
@@ -118,7 +128,19 @@ set -a && source .env && set +a
 echo "base=$JIRA_BASE_URL token=${JIRA_API_TOKEN:0:6}...${JIRA_API_TOKEN: -4}"
 ```
 
-`projects.toml` 는 한 섹션 `[name]` = 한 repo (§3.2 참조).
+`projects.toml` 는 한 섹션 `[name]` = 한 repo. 필드:
+
+```toml
+[ceph-api]
+path = "/Users/hyungjunpark/IdeaProjects/ceph-service-api"   # 필수, 절대경로
+default_branch = "dev"                                       # 필수, base 브랜치
+remote = "306"                                               # 선택, 기본값 "origin"
+test_cmd = "./gradlew test --no-daemon"                      # 선택, 비우면 테스트 스킵
+test_timeout = 600                                           # 선택, 기본 600
+# disabled = true                                            # 선택, 임시 비활성화
+```
+
+봇은 기동 시 1회 파싱·캐시 (`tomllib` 표준 라이브러리). 봇 자기 자신의 repo 는 등록해도 self-modification 가드로 거부된다.
 
 ---
 
@@ -152,7 +174,7 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-`pyproject.toml` 의 의존성(`requests`, `slack-bolt`, `python-dotenv`) 만 설치되며 30초~1분 이내. 콘솔 스크립트 `jira-bot` / `jira-digest` 가 `.venv/bin/` 에 등록됩니다.
+`pyproject.toml` 의 의존성(`requests`, `slack-bolt`, `python-dotenv`) 만 설치되며 30초~1분 이내. 단일 콘솔 스크립트 `jira` 가 `.venv/bin/` 에 등록됩니다 (`jira bot`, `jira digest`, `jira setup`, `jira validate`, `jira status`, `jira install`, `jira uninstall`, `jira logs`).
 
 ---
 
@@ -160,21 +182,29 @@ pip install -e .
 
 각 단계는 exit code 0 확인. 실패 시 다음으로 진행 금지.
 
+### 7.0 봇 토큰 라이브 검증 — 인증/형식 확인
+
+```bash
+jira setup
+```
+
+기대: wizard 가 떠서 §1 6개 키를 묻고, 입력 후 Jira `/myself` + Slack `auth.test` 가 모두 200 으로 떨어지면 그대로 Socket Mode 진입. 401/`invalid_auth` 나면 그 키만 다시 묻는다. (디지스트만 쓸 거면 7.0 은 건너뛰고 7.1 부터 진행해도 됨.)
+
 ### 7.1 Mock + no-LLM — 포맷 구조 확인
 ```bash
-jira-digest --mock --dry-run --no-llm
+jira digest --mock --dry-run --no-llm
 ```
 기대: `"type": "header"` 블록 포함된 JSON 출력.
 
 ### 7.2 Mock + CLI 요약 — LLM 파이프라인 확인
 ```bash
-jira-digest --mock --dry-run --backend cli
+jira digest --mock --dry-run --backend cli
 ```
 기대: 4개 이슈 각 라인 아래 `📝 …` 요약 붙음. 실패 시 `LLM_BACKEND=none` 로 폴백하고 사용자에게 알림.
 
 ### 7.3 실제 Jira + dry-run — 인증/JQL 확인
 ```bash
-jira-digest --dry-run
+jira digest --dry-run
 ```
 기대: `📋 Jira 할당 이슈 N건` 로그, exit 0. 실패 패턴별 대응:
 
@@ -192,7 +222,7 @@ jira-digest --dry-run
 `7.3` 까지 통과했으면 **사용자에게 명시적으로** "실제 DM을 보냅니다. 진행할까요?" 질문. "예" 받은 후에만:
 
 ```bash
-jira-digest
+jira digest
 ```
 
 기대: `[ok] posted to Slack (ts=..., channel=D...)`.
@@ -221,7 +251,8 @@ curl -s "https://slack.com/api/chat.getPermalink?channel=<반환된 channel>&mes
 - [ ] `.env` 생성 완료 (파일 존재·따옴표 OK, `SLACK_APP_TOKEN` 포함)
 - [ ] `.gitignore` 에 `.env` 포함 확인
 - [ ] Slack App: Socket Mode ON / Messages Tab ON + "Allow users to send..." 체크 / Event Subscriptions ON (`message.im`, `app_mention`)
-- [ ] `python3 -m venv .venv` + `pip install -r requirements.txt` 완료
+- [ ] `python3 -m venv .venv` + `pip install -e .` 완료 (콘솔 스크립트 `jira` `.venv/bin/` 등록 확인)
+- [ ] `jira` 한 번 실행해 라이브 토큰 검증 통과 (Jira `/myself` · Slack `auth.test` 200 OK) 확인
 - [ ] dry-run 3종 통과 (mock/no-llm, mock/cli, real/dry-run)
 - [ ] 실제 발송 1회 성공, permalink 확인
 - [ ] (선택) cron 안내 전달

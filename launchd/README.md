@@ -1,8 +1,8 @@
 # launchd setup (Step 13)
 
-`local.jira-bot.plist` is a macOS LaunchAgent that supervises the
-`jira-bot` console script (defined in `pyproject.toml`, calls `bot:main`)
-per plan.md §11:
+`local.jira-bot.plist` is a macOS LaunchAgent that supervises
+`jira bot` (the unified `jira` console script defined in `pyproject.toml`,
+which dispatches to `bot:main`) per plan.md §11:
 
 - starts at login (`RunAtLoad`)
 - auto-restarts on any exit, throttled to 30s (`KeepAlive` + `ThrottleInterval`)
@@ -13,6 +13,14 @@ per plan.md §11:
   empty default environment
 
 ## Install
+
+The unified CLI provides a one-liner that does both copy + bootstrap:
+
+```sh
+jira install
+```
+
+Or do it by hand:
 
 ```sh
 cp launchd/local.jira-bot.plist ~/Library/LaunchAgents/
@@ -32,13 +40,16 @@ tail -f ~/Library/Logs/jira-bot.log
 # Status
 launchctl print gui/$(id -u)/local.jira-bot | head -20
 
-# Restart (after .env or projects.md changes)
+# Restart (after .env or projects.toml changes)
 launchctl kickstart -k gui/$(id -u)/local.jira-bot
 
 # Stop temporarily
 launchctl bootout gui/$(id -u)/local.jira-bot
 
-# Permanently remove
+# Permanently remove (one-liner)
+jira uninstall
+
+# …or by hand
 launchctl bootout gui/$(id -u)/local.jira-bot
 rm ~/Library/LaunchAgents/local.jira-bot.plist
 ```
@@ -47,9 +58,9 @@ rm ~/Library/LaunchAgents/local.jira-bot.plist
 
 - The plist hardcodes absolute paths under `/Users/hyungjunpark/...`. This is
   a single-user bot (plan.md §2), so a template wasn't worth the indirection.
-  If you ever fork it, edit the paths in the plist (the `jira-bot` entry, the
+  If you ever fork it, edit the paths in the plist (the `jira` entry, the
   `WorkingDirectory`, and the two log paths).
-- `cron` digest (`jira_daily_digest.py`) keeps its own schedule and is
+- `cron` digest (`jira digest`) keeps its own schedule and is
   unaffected by this LaunchAgent — see plan.md §8.
 - If `gh auth refresh` invalidates the token cache, restart the agent so
   bot.py reloads it.
