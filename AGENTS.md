@@ -87,7 +87,7 @@ which claude        # LLM_BACKEND=cli 를 쓸 때만 필요; 없으면 api/none 
 권장: 봇이 자체 wizard 를 띄우게 한다. 의존성 설치(§6) 후 사용자에게 다음을 안내:
 
 ```bash
-python bot.py
+jira-bot
 ```
 
 처음 실행 시 `.env` 또는 `projects.md` 가 비어 있으면 인터랙티브 wizard 가 시작되어 §1 의 6개 값 + (선택) repo 등록까지 한 화면에서 묻는다.
@@ -101,7 +101,7 @@ python bot.py
 기존 값을 다시 편집하고 싶으면:
 
 ```bash
-python bot.py --setup
+jira-bot --setup
 ```
 
 (빈 입력으로 Enter 하면 기존 값 유지)
@@ -149,10 +149,10 @@ git check-ignore -v .env   # → ".gitignore:N:.env  .env"  가 뜨면 OK
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 ```
 
-`requirements.txt` 는 `requests` 한 개뿐이라 30초 이내.
+`pyproject.toml` 의 의존성(`requests`, `slack-bolt`, `python-dotenv`) 만 설치되며 30초~1분 이내. 콘솔 스크립트 `jira-bot` / `jira-digest` 가 `.venv/bin/` 에 등록됩니다.
 
 ---
 
@@ -162,19 +162,19 @@ pip install -r requirements.txt
 
 ### 7.1 Mock + no-LLM — 포맷 구조 확인
 ```bash
-python jira_daily_digest.py --mock --dry-run --no-llm
+jira-digest --mock --dry-run --no-llm
 ```
 기대: `"type": "header"` 블록 포함된 JSON 출력.
 
 ### 7.2 Mock + CLI 요약 — LLM 파이프라인 확인
 ```bash
-python jira_daily_digest.py --mock --dry-run --backend cli
+jira-digest --mock --dry-run --backend cli
 ```
 기대: 4개 이슈 각 라인 아래 `📝 …` 요약 붙음. 실패 시 `LLM_BACKEND=none` 로 폴백하고 사용자에게 알림.
 
 ### 7.3 실제 Jira + dry-run — 인증/JQL 확인
 ```bash
-python jira_daily_digest.py --dry-run
+jira-digest --dry-run
 ```
 기대: `📋 Jira 할당 이슈 N건` 로그, exit 0. 실패 패턴별 대응:
 
@@ -192,7 +192,7 @@ python jira_daily_digest.py --dry-run
 `7.3` 까지 통과했으면 **사용자에게 명시적으로** "실제 DM을 보냅니다. 진행할까요?" 질문. "예" 받은 후에만:
 
 ```bash
-python jira_daily_digest.py
+jira-digest
 ```
 
 기대: `[ok] posted to Slack (ts=..., channel=D...)`.

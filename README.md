@@ -9,7 +9,7 @@
 
 봇의 명령 카탈로그·동작은 [`FEATURES.md`](./FEATURES.md), 설계 의도는 [`plan.md`](./plan.md), AI 자동 세팅 가이드는 [`AGENTS.md`](./AGENTS.md) 참조.
 
-> **⚡ 빠른 setup** — 디지스트만 쓰든 봇까지 쓰든, `.venv` 활성화 후 `python bot.py --setup` 한 번 실행하면 인터랙티브 wizard 가 토큰·이메일·repo 등록까지 묻습니다 (시크릿은 `getpass` 마스킹). 수동으로 하려면 아래 1~5장을 순서대로 따라가세요.
+> **⚡ 빠른 setup** — 디지스트만 쓰든 봇까지 쓰든, `.venv` 활성화 + `pip install -e .` 후 `jira-bot --setup` 한 번 실행하면 인터랙티브 wizard 가 토큰·이메일·repo 등록까지 묻습니다 (시크릿은 `getpass` 마스킹). 수동으로 하려면 아래 1~5장을 순서대로 따라가세요.
 
 ---
 
@@ -100,25 +100,26 @@ Haiku 기준 이슈 20건이어도 하루 약 1~2센트 수준입니다.
 cd <이 폴더>
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .              # 봇·디지스트 + 의존성 설치, `jira-bot` / `jira-digest` 콘솔 스크립트 등록
+# pip install -e ".[dev]"     # 테스트도 돌릴 거면 (pytest 포함)
 
 cp .env.example .env
-# .env 파일을 열어 실제 값으로 교체
+# .env 파일을 열어 실제 값으로 교체  (또는 `jira-bot --setup` 으로 wizard 사용)
 
 # 환경 변수 로드
 set -a; source .env; set +a
 
 # mock 데이터 + 요약 스킵 → 완전 오프라인, 블록 구조만 확인
-python jira_daily_digest.py --mock --dry-run --no-llm
+jira-digest --mock --dry-run --no-llm
 
 # mock 데이터 + CLI 요약 테스트 (Slack 안 보냄)
-python jira_daily_digest.py --mock --dry-run --backend cli
+jira-digest --mock --dry-run --backend cli
 
 # 실제 Jira 조회 + 요약까지 하되 Slack 안 보내고 페이로드만 출력
-python jira_daily_digest.py --dry-run
+jira-digest --dry-run
 
 # 진짜 실행 (Slack DM 전송)
-python jira_daily_digest.py
+jira-digest
 ```
 
 ## 5. 매일 아침 9시에 자동 실행 (cron)
@@ -127,7 +128,7 @@ python jira_daily_digest.py
 
 ```cron
 # 평일 오전 9:00 Jira digest
-0 9 * * 1-5 /absolute/path/to/.venv/bin/python /absolute/path/to/jira_daily_digest.py >> /absolute/path/to/digest.log 2>&1
+0 9 * * 1-5 /absolute/path/to/.venv/bin/jira-digest >> /absolute/path/to/digest.log 2>&1
 ```
 
 환경 변수는 cron이 기본적으로 읽어주지 않으니, 두 가지 중 하나:
@@ -140,7 +141,7 @@ python jira_daily_digest.py
 set -euo pipefail
 cd "$(dirname "$0")"
 set -a; source .env; set +a
-./.venv/bin/python jira_daily_digest.py
+./.venv/bin/jira-digest
 ```
 
 ```bash
@@ -155,7 +156,7 @@ crontab:
 **방법 B — crontab 안에 직접 export**
 
 ```cron
-0 9 * * 1-5 JIRA_BASE_URL=https://... JIRA_EMAIL=... JIRA_API_TOKEN=... SLACK_BOT_TOKEN=xoxb-... SLACK_USER_ID=U... /path/.venv/bin/python /path/jira_daily_digest.py
+0 9 * * 1-5 JIRA_BASE_URL=https://... JIRA_EMAIL=... JIRA_API_TOKEN=... SLACK_BOT_TOKEN=xoxb-... SLACK_USER_ID=U... /path/.venv/bin/jira-digest
 ```
 
 ### macOS에서 맥이 자고 있어도 실행되게 하려면
@@ -183,14 +184,14 @@ cron은 잠든 맥에서는 안 뜹니다. 필요하면 `launchd`로 감싸거�
 ### 빠른 시작
 
 ```bash
-# 1) 의존성 (디지스트와 같은 .venv 사용)
+# 1) 의존성 (디지스트와 같은 .venv 사용 — 4장에서 `pip install -e .` 끝났다고 가정)
 source .venv/bin/activate
 
 # 2) 처음 또는 토큰 갱신 시 — wizard 가 .env / projects.md 한 번에 묻습니다
-python bot.py --setup
+jira-bot --setup
 
 # 3) 평소 실행 (foreground 시연용)
-python bot.py
+jira-bot
 ```
 
 ### 명령 카탈로그 (요약)
@@ -231,7 +232,7 @@ macOS 가 시스템 sleep 에 들어가면 launchd 봇도 정지됩니다. 외�
 
 - 시스템 설정 → 배터리 → 전원 어댑터 → "잠자기 방지" 체크
 - 클램쉘 모드 (외부 전원·디스플레이·키보드 연결 시 노트북 닫아도 깨어 있음)
-- 또는 `caffeinate -di .venv/bin/python bot.py` 형태로 foreground 실행
+- 또는 `caffeinate -di .venv/bin/jira-bot` 형태로 foreground 실행
 
 ### 안전장치
 
@@ -267,7 +268,7 @@ FEATURES.md              # 봇 기능 정의서·명령 카탈로그
 AGENTS.md                # AI 에이전트용 자동 setup 가이드
 launchd/                 # com.hjpark.jira-bot.plist 예시 + README
 .env.example             # 환경 변수 템플릿 (디지스트 + 봇 공용)
-requirements.txt         # Python 의존성
+pyproject.toml           # 패키지 메타데이터 + 의존성 + 콘솔 스크립트 (`jira-bot`, `jira-digest`)
 tests/                   # pytest 315건 (live 마커 1건 opt-in)
 ```
 
