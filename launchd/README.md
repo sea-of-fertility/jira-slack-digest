@@ -1,6 +1,7 @@
 # launchd setup (Step 13)
 
-`com.hjpark.jira-bot.plist` is a macOS LaunchAgent that supervises `bot.py`
+`com.hjpark.jira-bot.plist` is a macOS LaunchAgent that supervises the
+`jira-bot` console script (defined in `pyproject.toml`, calls `bot:main`)
 per plan.md §11:
 
 - starts at login (`RunAtLoad`)
@@ -46,7 +47,8 @@ rm ~/Library/LaunchAgents/com.hjpark.jira-bot.plist
 
 - The plist hardcodes absolute paths under `/Users/hyungjunpark/...`. This is
   a single-user bot (plan.md §2), so a template wasn't worth the indirection.
-  If you ever fork it, edit the four paths in the plist.
+  If you ever fork it, edit the paths in the plist (the `jira-bot` entry, the
+  `WorkingDirectory`, and the two log paths).
 - `cron` digest (`jira_daily_digest.py`) keeps its own schedule and is
   unaffected by this LaunchAgent — see plan.md §8.
 - If `gh auth refresh` invalidates the token cache, restart the agent so
