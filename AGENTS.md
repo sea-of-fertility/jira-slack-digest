@@ -82,7 +82,7 @@ which claude        # LLM_BACKEND=cli 를 쓸 때만 필요; 없으면 api/none 
 
 ---
 
-## 4. `.env` 와 `projects.md` 생성 — 자동 wizard
+## 4. `.env` 와 `projects.toml` 생성 — 자동 wizard
 
 권장: 봇이 자체 wizard 를 띄우게 한다. 의존성 설치(§6) 후 사용자에게 다음을 안내:
 
@@ -90,7 +90,7 @@ which claude        # LLM_BACKEND=cli 를 쓸 때만 필요; 없으면 api/none 
 jira-bot
 ```
 
-처음 실행 시 `.env` 또는 `projects.md` 가 비어 있으면 인터랙티브 wizard 가 시작되어 §1 의 6개 값 + (선택) repo 등록까지 한 화면에서 묻는다.
+처음 실행 시 `.env` 또는 `projects.toml` 가 비어 있으면 인터랙티브 wizard 가 시작되어 §1 의 6개 값 + (선택) repo 등록까지 한 화면에서 묻는다.
 
 - 시크릿(`*_TOKEN`, `*_API_KEY`) 입력은 `getpass` 로 마스킹 → 터미널·스크롤백 노출 없음
 - 입력값 echo 도 앞6/뒤4 마스킹
@@ -118,7 +118,7 @@ set -a && source .env && set +a
 echo "base=$JIRA_BASE_URL token=${JIRA_API_TOKEN:0:6}...${JIRA_API_TOKEN: -4}"
 ```
 
-`projects.md` 는 마크다운 표 한 행 = 1 repo (§3.2 참조).
+`projects.toml` 는 한 섹션 `[name]` = 한 repo (§3.2 참조).
 
 ---
 

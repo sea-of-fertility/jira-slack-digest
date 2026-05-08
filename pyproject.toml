@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "jira-bot"
 version = "0.1.0"
 description = "Slack DM bot + daily Jira digest for personal use"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31,<3",
     "slack-bolt>=1.28,<2",

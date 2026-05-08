@@ -83,17 +83,21 @@ JIRA_API_TOKEN=...
 BOT_USER=hjpark        # (옵션) 브랜치 namespace 기본값
 ```
 
-### 3.2 `projects.md`
+### 3.2 `projects.toml`
 
-마크다운 표 1 행 = 1 repo:
+TOML 한 섹션 = 한 repo:
 
-| 이름 | 경로 | 기본 브랜치 | 원격 | 테스트 명령 | 테스트 타임아웃(초) |
-|---|---|---|---|---|---|
-| ceph-api | /Users/hyungjunpark/IdeaProjects/ceph-service-api | dev | 305 | ./gradlew test --no-daemon | 600 |
+```toml
+[ceph-api]
+path = "/Users/hyungjunpark/IdeaProjects/ceph-service-api"
+default_branch = "dev"
+remote = "305"                                # 생략 시 "origin"
+test_cmd = "./gradlew test --no-daemon"       # 생략/빈 문자열이면 테스트 skip
+test_timeout = 600                            # 생략 시 600
+# disabled = true                             # 임시 비활성화
+```
 
-봇이 기동 시 1회 파싱·캐시. `테스트 명령` 이 `-` 또는 빈 칸이면 테스트 skip. `원격` 이 비면 `origin` default.
-
-봇 자기 자신의 repo 는 등록해도 self-modification 가드로 거부됨.
+봇이 기동 시 1회 파싱·캐시 (`tomllib` 표준 라이브러리). 봇 자기 자신의 repo 는 등록해도 self-modification 가드로 거부됨.
 
 ### 3.3 컨텍스트 영속화
 
@@ -167,7 +171,7 @@ launchd plist : ~/Library/LaunchAgents/com.hjpark.jira-bot.plist
 bot.py                       Socket Mode 진입점
 bot_lib/
 ├─ commands.py               run/help 파서
-├─ registry.py               projects.md 파싱
+├─ registry.py               projects.toml 파싱 (tomllib)
 ├─ jira_client.py            Jira REST + ADF→텍스트
 ├─ git_ops.py                git 래퍼 (find_files, list_remotes, branches, push, ...)
 ├─ claude_runner.py          claude -p Popen + on_start/on_end 콜백

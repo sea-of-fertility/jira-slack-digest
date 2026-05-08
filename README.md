@@ -255,7 +255,7 @@ jira_daily_digest.py     # A. Daily Digest 메인 스크립트
 bot.py                   # B. Slack DM 봇 진입점 (Socket Mode)
 bot_lib/                 # 봇 라이브러리
 ├─ commands.py           #   run / jira create / jira get 파서
-├─ registry.py           #   projects.md 파싱
+├─ registry.py           #   projects.toml 파싱 (tomllib)
 ├─ jira_client.py        #   Jira REST + ADF 변환 + create_issue + search_my_issues
 ├─ git_ops.py            #   git 래퍼 (find_files, branches, push, ...)
 ├─ claude_runner.py      #   claude -p Popen + 콜백
@@ -267,7 +267,7 @@ bot_lib/                 # 봇 라이브러리
 ├─ cancellation.py       #   진행 중 claude SIGTERM 추적
 └─ setup_wizard.py       #   인터랙티브 wizard + 매 기동 토큰 라이브 검증
 
-projects.md              # 봇이 다룰 repo 등록 표 (마크다운)
+projects.toml            # 봇이 다룰 repo 등록 (TOML, 한 섹션 = 한 repo)
 plan.md                  # 봇 설계 의도·결정사항
 FEATURES.md              # 봇 기능 정의서·명령 카탈로그
 AGENTS.md                # AI 에이전트용 자동 setup 가이드

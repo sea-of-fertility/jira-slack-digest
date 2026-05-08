@@ -3,14 +3,10 @@ import pytest
 from bot_lib.registry import Project, RegistryError, load_registry
 
 
-HEADER = "| 이름 | 경로 | 기본 브랜치 | 원격 | 테스트 명령 | 테스트 타임아웃(초) |"
-SEP = "|---|---|---|---|---|---|"
-
-
 def _write(tmp_path, body: str):
-    md = tmp_path / "projects.md"
-    md.write_text(body)
-    return str(md)
+    f = tmp_path / "projects.toml"
+    f.write_text(body)
+    return str(f)
 
 
 def test_parse_single_project(tmp_path):
@@ -18,11 +14,13 @@ def test_parse_single_project(tmp_path):
     proj.mkdir()
     path = _write(
         tmp_path,
-        f"""# Project Registry
-
-{HEADER}
-{SEP}
-| myproj | {proj} | main | origin | pytest | 120 |
+        f"""
+[myproj]
+path = "{proj}"
+default_branch = "main"
+remote = "origin"
+test_cmd = "pytest"
+test_timeout = 120
 """,
     )
     reg = load_registry(path)
@@ -37,32 +35,44 @@ def test_parse_single_project(tmp_path):
     assert p.test_timeout == 120
 
 
-@pytest.mark.parametrize("field", ["-", ""])
-def test_test_cmd_skip(tmp_path, field):
+@pytest.mark.parametrize("body_extra", ['test_cmd = ""', "# no test_cmd"])
+def test_test_cmd_blank_or_missing_means_skip(tmp_path, body_extra):
     proj = tmp_path / "skipme"
     proj.mkdir()
     path = _write(
         tmp_path,
-        f"""{HEADER}
-{SEP}
-| skipme | {proj} | main | origin | {field} | 60 |
+        f"""
+[skipme]
+path = "{proj}"
+default_branch = "main"
+{body_extra}
+test_timeout = 60
 """,
     )
     reg = load_registry(path)
     assert reg["skipme"].test_cmd is None
 
 
-def test_comment_row_skipped(tmp_path):
+def test_disabled_section_skipped(tmp_path):
     active = tmp_path / "active"
     active.mkdir()
     disabled = tmp_path / "disabled"
     disabled.mkdir()
     path = _write(
         tmp_path,
-        f"""{HEADER}
-{SEP}
-| active | {active} | main | origin | pytest | 60 |
-| # disabled | {disabled} | main | origin | pytest | 60 |
+        f"""
+[active]
+path = "{active}"
+default_branch = "main"
+test_cmd = "pytest"
+test_timeout = 60
+
+[disabled-one]
+path = "{disabled}"
+default_branch = "main"
+test_cmd = "pytest"
+test_timeout = 60
+disabled = true
 """,
     )
     reg = load_registry(path)
@@ -76,16 +86,25 @@ def test_parse_multiple_projects(tmp_path):
     b.mkdir()
     path = _write(
         tmp_path,
-        f"""{HEADER}
-{SEP}
-| a | {a} | main | origin | pytest | 60 |
-| b | {b} | develop | upstream | ./gradlew test --no-daemon | 600 |
+        f"""
+[a]
+path = "{a}"
+default_branch = "main"
+test_cmd = "pytest"
+test_timeout = 60
+
+[b]
+path = "{b}"
+default_branch = "develop"
+remote = "upstream"
+test_cmd = "./gradlew test --no-daemon"
+test_timeout = 600
 """,
     )
     reg = load_registry(path)
     assert set(reg) == {"a", "b"}
     assert reg["a"].test_timeout == 60
-    assert reg["a"].remote == "origin"
+    assert reg["a"].remote == "origin"   # default
     assert reg["b"].default_branch == "develop"
     assert reg["b"].remote == "upstream"
     assert reg["b"].test_cmd == "./gradlew test --no-daemon"
@@ -99,56 +118,83 @@ def test_remote_field_parsed(tmp_path):
     proj.mkdir()
     path = _write(
         tmp_path,
-        f"""{HEADER}
-{SEP}
-| p | {proj} | dev | 305 | ./gradlew test | 600 |
+        f"""
+[p]
+path = "{proj}"
+default_branch = "dev"
+remote = "305"
+test_cmd = "./gradlew test"
+test_timeout = 600
 """,
     )
     assert load_registry(path)["p"].remote == "305"
 
 
-@pytest.mark.parametrize("field", ["-", ""])
-def test_remote_defaults_to_origin_when_blank(tmp_path, field):
+@pytest.mark.parametrize("remote_line", ['remote = ""', "# no remote"])
+def test_remote_defaults_to_origin_when_blank_or_missing(tmp_path, remote_line):
     proj = tmp_path / "p"
     proj.mkdir()
     path = _write(
         tmp_path,
-        f"""{HEADER}
-{SEP}
-| p | {proj} | main | {field} | pytest | 60 |
+        f"""
+[p]
+path = "{proj}"
+default_branch = "main"
+{remote_line}
+test_cmd = "pytest"
+test_timeout = 60
 """,
     )
     assert load_registry(path)["p"].remote == "origin"
 
 
+def test_test_timeout_defaults_to_600_when_missing(tmp_path):
+    proj = tmp_path / "p"
+    proj.mkdir()
+    path = _write(
+        tmp_path,
+        f"""
+[p]
+path = "{proj}"
+default_branch = "main"
+""",
+    )
+    assert load_registry(path)["p"].test_timeout == 600
+
+
 # ---- error cases ----
 
 
-def test_rejects_bad_timeout(tmp_path):
+def test_rejects_bad_timeout_type(tmp_path):
     proj = tmp_path / "p"
     proj.mkdir()
     path = _write(
         tmp_path,
-        f"""{HEADER}
-{SEP}
-| p | {proj} | main | origin | pytest | sixty |
+        f"""
+[p]
+path = "{proj}"
+default_branch = "main"
+test_cmd = "pytest"
+test_timeout = "sixty"
 """,
     )
-    with pytest.raises(RegistryError, match="line 3.*타임아웃"):
+    with pytest.raises(RegistryError, match="test_timeout"):
         load_registry(path)
 
 
-def test_rejects_column_mismatch(tmp_path):
+def test_rejects_zero_timeout(tmp_path):
     proj = tmp_path / "p"
     proj.mkdir()
     path = _write(
         tmp_path,
-        f"""{HEADER}
-{SEP}
-| p | {proj} | main | origin | pytest |
+        f"""
+[p]
+path = "{proj}"
+default_branch = "main"
+test_timeout = 0
 """,
     )
-    with pytest.raises(RegistryError, match="line 3.*컬럼"):
+    with pytest.raises(RegistryError, match="양수"):
         load_registry(path)
 
 
@@ -156,29 +202,83 @@ def test_rejects_missing_path(tmp_path):
     missing = tmp_path / "nope"
     path = _write(
         tmp_path,
-        f"""{HEADER}
-{SEP}
-| p | {missing} | main | origin | pytest | 60 |
+        f"""
+[p]
+path = "{missing}"
+default_branch = "main"
+test_cmd = "pytest"
+test_timeout = 60
 """,
     )
-    with pytest.raises(RegistryError, match="line 3.*경로"):
+    with pytest.raises(RegistryError, match="경로가 존재하지 않음"):
         load_registry(path)
 
 
-def test_rejects_duplicate_name(tmp_path):
-    a = tmp_path / "a"
-    a.mkdir()
-    b = tmp_path / "b"
-    b.mkdir()
+def test_rejects_missing_path_field(tmp_path):
     path = _write(
         tmp_path,
-        f"""{HEADER}
-{SEP}
-| dup | {a} | main | origin | pytest | 60 |
-| dup | {b} | main | origin | pytest | 60 |
+        """
+[p]
+default_branch = "main"
 """,
     )
-    with pytest.raises(RegistryError, match="line 4.*중복"):
+    with pytest.raises(RegistryError, match="`path` 필수"):
+        load_registry(path)
+
+
+def test_rejects_missing_default_branch(tmp_path):
+    proj = tmp_path / "p"
+    proj.mkdir()
+    path = _write(
+        tmp_path,
+        f"""
+[p]
+path = "{proj}"
+""",
+    )
+    with pytest.raises(RegistryError, match="default_branch"):
+        load_registry(path)
+
+
+def test_rejects_unknown_field(tmp_path):
+    proj = tmp_path / "p"
+    proj.mkdir()
+    path = _write(
+        tmp_path,
+        f"""
+[p]
+path = "{proj}"
+default_branch = "main"
+nonsense = "x"
+""",
+    )
+    with pytest.raises(RegistryError, match="알 수 없는 필드"):
+        load_registry(path)
+
+
+def test_rejects_invalid_name_char(tmp_path):
+    proj = tmp_path / "p"
+    proj.mkdir()
+    # TOML allows quoted keys like "a/b"; we reject them at the registry level.
+    path = _write(
+        tmp_path,
+        f"""
+"a/b" = {{ path = "{proj}", default_branch = "main" }}
+""",
+    )
+    with pytest.raises(RegistryError, match="이름은"):
+        load_registry(path)
+
+
+def test_rejects_malformed_toml(tmp_path):
+    path = _write(
+        tmp_path,
+        """
+[p
+path = "/x"
+""",
+    )
+    with pytest.raises(RegistryError, match="TOML 파싱"):
         load_registry(path)
 
 
@@ -189,9 +289,12 @@ def test_follows_symlink(tmp_path):
     link.symlink_to(real)
     path = _write(
         tmp_path,
-        f"""{HEADER}
-{SEP}
-| p | {link} | main | origin | pytest | 60 |
+        f"""
+[p]
+path = "{link}"
+default_branch = "main"
+test_cmd = "pytest"
+test_timeout = 60
 """,
     )
     reg = load_registry(path)

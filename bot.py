@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Slack DM bot — plan.md §3 entry point.
 
-Loads env + projects.md, wires slack_bolt Socket Mode, delegates each DM
-to bot_lib.slack_handler.handle_message. Run via `python bot.py` for the
+Loads env + projects.toml, wires slack_bolt Socket Mode, delegates each
+DM to bot_lib.slack_handler.handle_message. Run via `jira-bot` for the
 local PoC; in production the launchd plist (Step 13) supervises it.
 
-Startup: when required env keys are missing, projects.md has no entries,
-or any token fails a live `/myself` / `auth.test` probe, the interactive
-setup wizard launches automatically (TTY only) and the bot then keeps
-running in the same process — no manual restart needed. Non-TTY
-(launchd) exits with status 2 so the user can run `jira-bot --setup`.
-Pass `--setup` to force the wizard and exit (no bot startup).
+Startup: when required env keys are missing, projects.toml has no
+entries, or any token fails a live `/myself` / `auth.test` probe, the
+interactive setup wizard launches automatically (TTY only) and the bot
+then keeps running in the same process — no manual restart needed.
+Non-TTY (launchd) exits with status 2 so the user can run
+`jira-bot --setup`. Pass `--setup` to force the wizard and exit
+(no bot startup).
 """
 from __future__ import annotations
 
@@ -52,13 +53,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--setup", action="store_true",
-        help="설정 wizard 강제 실행 (.env / projects.md 편집)",
+        help="설정 wizard 강제 실행 (.env / projects.toml 편집)",
     )
     args = parser.parse_args()
 
     here = Path(__file__).resolve().parent
     env_path = here / ".env"
-    projects_path = here / "projects.md"
+    projects_path = here / "projects.toml"
 
     load_dotenv(env_path)
     missing = setup_wizard.missing_env_keys()

@@ -1,15 +1,20 @@
 import re
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-COLUMNS = 6
-SEPARATOR_RE = re.compile(r"^\|(?:\s*:?-{3,}:?\s*\|)+\s*$")
 DEFAULT_REMOTE = "origin"
+DEFAULT_TIMEOUT = 600
+_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_ALLOWED_FIELDS = frozenset({
+    "path", "default_branch", "remote",
+    "test_cmd", "test_timeout", "disabled",
+})
 
 
 class RegistryError(Exception):
-    """Bot startup is rejected when projects.md has problems."""
+    """Bot startup is rejected when projects.toml has problems."""
 
 
 @dataclass(frozen=True)
@@ -23,54 +28,71 @@ class Project:
 
 
 def load_registry(file_path: str) -> dict[str, Project]:
-    text = Path(file_path).read_text()
+    raw_bytes = Path(file_path).read_bytes()
+    try:
+        data = tomllib.loads(raw_bytes.decode("utf-8"))
+    except tomllib.TOMLDecodeError as e:
+        raise RegistryError(f"TOML 파싱 실패: {e}") from None
+    except UnicodeDecodeError as e:
+        raise RegistryError(f"UTF-8 디코딩 실패: {e}") from None
+
     projects: dict[str, Project] = {}
-    seen_header = False
-
-    for lineno, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not (line.startswith("|") and line.endswith("|")):
-            continue
-        if SEPARATOR_RE.match(line):
-            continue
-
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) != COLUMNS:
+    for name, section in data.items():
+        if not isinstance(section, dict):
             raise RegistryError(
-                f"line {lineno}: 컬럼 개수 {len(cells)} (예상 {COLUMNS})"
+                f"`{name}`: TOML 섹션이 아님 (테이블 [name] 형식이어야 함)"
             )
-
-        if not seen_header:
-            seen_header = True
-            continue
-
-        name, path_str, branch, remote_raw, test_cmd_raw, timeout_raw = cells
-        if name.startswith("#"):
-            continue
-
-        if not Path(path_str).exists():
-            raise RegistryError(f"line {lineno}: 경로가 존재하지 않음: {path_str}")
-
-        try:
-            timeout = int(timeout_raw)
-        except ValueError:
+        if not _NAME_RE.match(name):
             raise RegistryError(
-                f"line {lineno}: 타임아웃이 정수가 아님: {timeout_raw!r}"
-            ) from None
-
-        if name in projects:
-            raise RegistryError(f"line {lineno}: 중복된 이름: {name}")
-
-        test_cmd = None if test_cmd_raw in ("", "-") else test_cmd_raw
-        remote = DEFAULT_REMOTE if remote_raw in ("", "-") else remote_raw
-
-        projects[name] = Project(
-            name=name,
-            path=path_str,
-            default_branch=branch,
-            remote=remote,
-            test_cmd=test_cmd,
-            test_timeout=timeout,
-        )
+                f"`{name}`: 이름은 영숫자 + `_` `-` 만 허용"
+            )
+        if section.get("disabled") is True:
+            continue
+        projects[name] = _parse_section(name, section)
 
     return projects
+
+
+def _parse_section(name: str, section: dict[str, Any]) -> Project:
+    unknown = set(section) - _ALLOWED_FIELDS
+    if unknown:
+        raise RegistryError(
+            f"`{name}`: 알 수 없는 필드 {sorted(unknown)}"
+        )
+
+    path_str = section.get("path")
+    if not isinstance(path_str, str) or not path_str:
+        raise RegistryError(f"`{name}`: `path` 필수 (문자열)")
+    if not Path(path_str).exists():
+        raise RegistryError(f"`{name}`: 경로가 존재하지 않음: {path_str}")
+
+    branch = section.get("default_branch")
+    if not isinstance(branch, str) or not branch:
+        raise RegistryError(f"`{name}`: `default_branch` 필수 (문자열)")
+
+    remote_raw = section.get("remote", "")
+    if not isinstance(remote_raw, str):
+        raise RegistryError(f"`{name}`: `remote` 는 문자열이어야 함")
+    remote = remote_raw or DEFAULT_REMOTE
+
+    test_cmd_raw = section.get("test_cmd", "")
+    if not isinstance(test_cmd_raw, str):
+        raise RegistryError(f"`{name}`: `test_cmd` 는 문자열이어야 함")
+    test_cmd: Optional[str] = test_cmd_raw or None
+
+    timeout = section.get("test_timeout", DEFAULT_TIMEOUT)
+    if not isinstance(timeout, int) or isinstance(timeout, bool):
+        raise RegistryError(
+            f"`{name}`: `test_timeout` 은 정수여야 함 (받음: {timeout!r})"
+        )
+    if timeout <= 0:
+        raise RegistryError(f"`{name}`: `test_timeout` 양수만 허용")
+
+    return Project(
+        name=name,
+        path=path_str,
+        default_branch=branch,
+        remote=remote,
+        test_cmd=test_cmd,
+        test_timeout=timeout,
+    )

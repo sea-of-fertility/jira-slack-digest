@@ -1,0 +1,24 @@
+# Project Registry
+#
+# bot_lib/registry.py 가 기동 시 이 파일을 파싱해 dict 로 캐시한다.
+# 새 repo 를 추가하려면 새 [name] 테이블을 만들고 봇을 재기동.
+# 임시 비활성화하려면 해당 섹션에 `disabled = true` 한 줄 추가.
+#
+# 봇 자신의 repo (/Users/hyungjunpark/dev/jira-slack-digest) 는 등록해도
+# orchestrator 의 self-repo 가드에 의해 거부된다 — 자기 자신을 수정하면
+# 브랜치 스위치로 봇 소스가 working tree 에서 사라져 launchd 재시작이 깨짐.
+#
+# 필드:
+#   path           (필수, str)  repo 절대경로
+#   default_branch (필수, str)  base 브랜치 (예: main, dev)
+#   remote         (선택, str)  default = "origin"
+#   test_cmd       (선택, str)  비우면 테스트 단계 스킵
+#   test_timeout   (선택, int)  default = 600
+#   disabled       (선택, bool) true 면 이 섹션 무시
+
+[ceph-api]
+path = "/Users/hyungjunpark/IdeaProjects/ceph-service-api"
+default_branch = "dev"
+remote = "305"
+test_cmd = "./gradlew test --no-daemon"
+test_timeout = 600

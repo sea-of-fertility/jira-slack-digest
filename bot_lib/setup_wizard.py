@@ -1,4 +1,4 @@
-"""Interactive setup wizard for `.env` and `projects.md`.
+"""Interactive setup wizard for `.env` and `projects.toml`.
 
 Triggered by `bot.py` when required env keys are missing or no projects are
 registered, or when the user passes `--setup` explicitly. Reads input from
@@ -8,8 +8,8 @@ Design notes:
   - Secrets never echo to stdout; masked preview is `xxxxxx…yyyy`.
   - `.env` write reuses the tempfile + `os.replace` pattern from
     `bot_lib/context.py:48-58` — no half-written files.
-  - `projects.md` row append goes through `registry.load_registry` for a
-    final round-trip validation; bad row is rolled back.
+  - `projects.toml` section append goes through `registry.load_registry`
+    for a final round-trip validation; bad section is rolled back.
 """
 from __future__ import annotations
 
@@ -182,9 +182,9 @@ def run(
     stream=sys.stdout,
 ) -> None:
     """Top-level wizard. Prompts for any missing env keys then optionally
-    appends new repo rows to projects.md. Idempotent: existing values are
-    preserved unless `force=True` (and even then, an empty input keeps the
-    current value).
+    appends new repo sections to projects.toml. Idempotent: existing values
+    are preserved unless `force=True` (and even then, an empty input keeps
+    the current value).
 
     `invalid_keys` adds those keys to the prompt list and clears their
     "current" suggestion so the user can't accidentally keep a known-bad
@@ -342,10 +342,20 @@ def _env_line(key: str, value: str) -> str:
     return f'{key}="{escaped}"'
 
 
-# ---------- projects.md ----------
+# ---------- projects.toml ----------
 
 
-_HEADER_RE = re.compile(r"^\|\s*이름\s*\|.*\|$")
+_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+@dataclass(frozen=True)
+class _RepoEntry:
+    name: str
+    path: str
+    default_branch: str
+    remote: Optional[str]   # None → omit from TOML (caller falls back to default)
+    test_cmd: Optional[str]
+    test_timeout: int
 
 
 def _maybe_add_repos(projects_path: Path, *, stream, force: bool) -> None:
@@ -357,7 +367,7 @@ def _maybe_add_repos(projects_path: Path, *, stream, force: bool) -> None:
     try:
         existing = load_registry(str(projects_path)) if projects_path.exists() else {}
     except RegistryError as e:
-        print(f"⚠️  projects.md 파싱 실패: {e}", file=stream)
+        print(f"⚠️  projects.toml 파싱 실패: {e}", file=stream)
         existing = {}
 
     if existing and not force:
@@ -376,25 +386,27 @@ def _maybe_add_repos(projects_path: Path, *, stream, force: bool) -> None:
         if ans in ("n", "no"):
             return
 
-        row = _prompt_repo_row(set(existing), stream=stream)
-        if row is None:
-            continue   # user gave up this row
-        _append_repo_row(projects_path, row)
+        entry = _prompt_repo_entry(set(existing), stream=stream)
+        if entry is None:
+            continue   # user gave up this entry
+        snapshot = projects_path.read_text() if projects_path.exists() else None
+        _append_repo_section(projects_path, entry)
 
         # Round-trip validation
         try:
             existing = load_registry(str(projects_path))
         except RegistryError as e:
-            print(f"❌ projects.md 검증 실패 — 마지막 행 롤백: {e}", file=stream)
-            _rollback_last_row(projects_path)
+            print(f"❌ projects.toml 검증 실패 — 마지막 섹션 롤백: {e}", file=stream)
+            if snapshot is None:
+                projects_path.unlink()
+            else:
+                projects_path.write_text(snapshot)
         else:
-            print(f"✅ {row[0]} 등록 완료", file=stream)
+            print(f"✅ {entry.name} 등록 완료", file=stream)
 
 
-def _prompt_repo_row(taken_names: set[str], *, stream) -> Optional[tuple]:
-    """Prompt 6 columns. Returns tuple (name, path, branch, remote, test_cmd, timeout)
-    or None if user aborts via empty name.
-    """
+def _prompt_repo_entry(taken_names: set[str], *, stream) -> Optional[_RepoEntry]:
+    """Prompt every field. Returns `None` if user aborts via empty name."""
     while True:
         name = input("  이름 (빈 입력 → 취소): ").strip()
         if not name:
@@ -402,20 +414,20 @@ def _prompt_repo_row(taken_names: set[str], *, stream) -> Optional[tuple]:
         if name in taken_names:
             print(f"  ❌ 이미 등록된 이름: {name}", file=stream)
             continue
-        if "|" in name:
-            print("  ❌ '|' 문자는 사용 불가", file=stream)
+        if not _NAME_RE.match(name):
+            print("  ❌ 이름은 영숫자 + `_` `-` 만 허용", file=stream)
             continue
         break
 
     while True:
-        path = input("  경로 (절대경로): ").strip()
-        if not path:
+        path_raw = input("  경로 (절대경로): ").strip()
+        if not path_raw:
             print("  ❌ 경로 필수", file=stream)
             continue
-        if not Path(path).expanduser().exists():
-            print(f"  ❌ 경로가 존재하지 않음: {path}", file=stream)
+        if not Path(path_raw).expanduser().exists():
+            print(f"  ❌ 경로가 존재하지 않음: {path_raw}", file=stream)
             continue
-        path = str(Path(path).expanduser())
+        path = str(Path(path_raw).expanduser())
         break
 
     branch = input("  기본 브랜치 (예: main): ").strip()
@@ -423,8 +435,11 @@ def _prompt_repo_row(taken_names: set[str], *, stream) -> Optional[tuple]:
         print("  ❌ 기본 브랜치 필수", file=stream)
         return None
 
-    remote = input(f"  원격 (빈 입력 → {DEFAULT_REMOTE}): ").strip() or "-"
-    test_cmd = input("  테스트 명령 (빈 입력 → 스킵): ").strip() or "-"
+    remote_raw = input(f"  원격 (빈 입력 → {DEFAULT_REMOTE}): ").strip()
+    remote = remote_raw or None  # None → field omitted, registry default kicks in
+
+    test_cmd_raw = input("  테스트 명령 (빈 입력 → 스킵): ").strip()
+    test_cmd = test_cmd_raw or None
 
     while True:
         timeout_raw = input("  테스트 타임아웃(초) [600]: ").strip() or "600"
@@ -438,43 +453,44 @@ def _prompt_repo_row(taken_names: set[str], *, stream) -> Optional[tuple]:
             continue
         break
 
-    return (name, path, branch, remote, test_cmd, str(timeout))
+    return _RepoEntry(
+        name=name, path=path, default_branch=branch,
+        remote=remote, test_cmd=test_cmd, test_timeout=timeout,
+    )
 
 
-_DEFAULT_HEADER = (
-    "| 이름 | 경로 | 기본 브랜치 | 원격 | 테스트 명령 | 테스트 타임아웃(초) |\n"
-    "|---|---|---|---|---|---|\n"
-)
+def _append_repo_section(path: Path, entry: _RepoEntry) -> None:
+    """Append a `[name]` TOML section to `projects.toml`. Atomic write."""
+    section_lines = [f"[{entry.name}]",
+                     f'path = {_toml_string(entry.path)}',
+                     f'default_branch = {_toml_string(entry.default_branch)}']
+    if entry.remote is not None:
+        section_lines.append(f'remote = {_toml_string(entry.remote)}')
+    if entry.test_cmd is not None:
+        section_lines.append(f'test_cmd = {_toml_string(entry.test_cmd)}')
+    section_lines.append(f"test_timeout = {entry.test_timeout}")
+    block = "\n".join(section_lines) + "\n"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = path.read_text()
+        # Make sure we land on a fresh line and have a blank gap before the
+        # new section so the file stays readable.
+        prefix = existing
+        if not prefix.endswith("\n"):
+            prefix += "\n"
+        if not prefix.endswith("\n\n"):
+            prefix += "\n"
+        body = prefix + block
+    else:
+        body = block
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(body)
+    os.replace(tmp, path)
 
 
-def _append_repo_row(path: Path, row: tuple) -> None:
-    line = "| " + " | ".join(row) + " |\n"
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(_DEFAULT_HEADER + line)
-        return
-
-    text = path.read_text()
-    if not _has_header(text):
-        # Header missing → append header + separator + row at the end
-        sep = "" if text.endswith("\n") else "\n"
-        path.write_text(text + sep + "\n" + _DEFAULT_HEADER + line)
-        return
-
-    sep = "" if text.endswith("\n") else "\n"
-    path.write_text(text + sep + line)
-
-
-def _has_header(text: str) -> bool:
-    return any(_HEADER_RE.match(ln.strip()) for ln in text.splitlines())
-
-
-def _rollback_last_row(path: Path) -> None:
-    """Remove the last `| ... |` row in projects.md (the one we just wrote)."""
-    lines = path.read_text().splitlines()
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i].strip()
-        if line.startswith("|") and line.endswith("|"):
-            del lines[i]
-            break
-    path.write_text("\n".join(lines) + ("\n" if lines else ""))
+def _toml_string(value: str) -> str:
+    """Render a TOML basic string. Backslash-escape `\\` and `"`."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'

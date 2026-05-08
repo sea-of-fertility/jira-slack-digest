@@ -134,7 +134,7 @@ def _full_inputs():
 
 def test_run_writes_env_file_when_missing(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     # Empty registry → repo prompt; we skip with 'n'
     projects_path.write_text("")
     inputs = _full_inputs()
@@ -163,7 +163,7 @@ def test_run_writes_env_file_when_missing(tmp_path, monkeypatch):
 
 def test_run_does_not_echo_secret_in_full(tmp_path, monkeypatch, capsys):
     env_path = tmp_path / ".env"
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     projects_path.write_text("")
     plain = ["https://x.atlassian.net", "me@x.com", "U01ABC23DEF", "n"]
     secret = ["tok-jira-12345678901234",
@@ -183,7 +183,7 @@ def test_run_does_not_echo_secret_in_full(tmp_path, monkeypatch, capsys):
 
 def test_run_validates_url_and_retries(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     projects_path.write_text("")
     plain = [
         "ftp://bad",                  # URL: rejected
@@ -205,7 +205,7 @@ def test_run_validates_url_and_retries(tmp_path, monkeypatch):
 
 def test_run_validates_email_and_retries(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     projects_path.write_text("")
     plain = [
         "https://x.atlassian.net",
@@ -226,7 +226,7 @@ def test_run_validates_email_and_retries(tmp_path, monkeypatch):
 
 def test_run_strips_trailing_slash_on_url(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     projects_path.write_text("")
     plain = ["https://x.atlassian.net/", "me@x.com", "U01ABC23DEF", "n"]
     secret = ["t1", "t2", "t3"]
@@ -240,7 +240,7 @@ def test_run_strips_trailing_slash_on_url(tmp_path, monkeypatch):
 
 def test_run_preserves_existing_values_on_partial_missing(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     projects_path.write_text("")
     # Existing .env has 5 of 6 keys; only SLACK_APP_TOKEN missing
     existing = {k: "preserved" for k in REQUIRED_ENV_KEYS if k != "SLACK_APP_TOKEN"}
@@ -261,7 +261,7 @@ def test_run_preserves_existing_values_on_partial_missing(tmp_path, monkeypatch)
 
 def test_run_keeps_existing_value_on_blank_input_in_force_mode(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     projects_path.write_text("")
     full = {k: "kept" for k in REQUIRED_ENV_KEYS}
     full["JIRA_BASE_URL"] = "https://kept.atlassian.net"
@@ -297,7 +297,7 @@ def _seed_full_env(tmp_path, monkeypatch):
 
 def test_repo_registration_appends_valid_row(tmp_path, monkeypatch):
     env_path = _seed_full_env(tmp_path, monkeypatch)
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     repo_dir = tmp_path / "myrepo"
     repo_dir.mkdir()
     plain = [
@@ -326,7 +326,7 @@ def test_repo_registration_appends_valid_row(tmp_path, monkeypatch):
 
 def test_repo_registration_rejects_nonexistent_path(tmp_path, monkeypatch):
     env_path = _seed_full_env(tmp_path, monkeypatch)
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     repo_dir = tmp_path / "real"
     repo_dir.mkdir()
     plain = [
@@ -348,15 +348,11 @@ def test_repo_registration_rejects_nonexistent_path(tmp_path, monkeypatch):
 
 def test_repo_registration_rejects_duplicate_name(tmp_path, monkeypatch):
     env_path = _seed_full_env(tmp_path, monkeypatch)
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     repo_dir = tmp_path / "dir"
     repo_dir.mkdir()
     # Pre-register one repo
-    projects_path.write_text(
-        "| 이름 | 경로 | 기본 브랜치 | 원격 | 테스트 명령 | 테스트 타임아웃(초) |\n"
-        "|---|---|---|---|---|---|\n"
-        f"| existing | {repo_dir} | main | origin | - | 600 |\n"
-    )
+    _write_seed_projects_toml(projects_path, repo_dir, name="existing")
     # force=True → .env 도 모두 다시 묻지만 빈 입력으로 기존 값 보존
     plain = [
         "", "", "",            # BASE_URL / EMAIL / USER_ID — keep
@@ -382,7 +378,7 @@ def test_repo_registration_rejects_duplicate_name(tmp_path, monkeypatch):
 
 def test_repo_registration_rejects_non_integer_timeout(tmp_path, monkeypatch):
     env_path = _seed_full_env(tmp_path, monkeypatch)
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     repo_dir = tmp_path / "dir"
     repo_dir.mkdir()
     plain = [
@@ -402,9 +398,9 @@ def test_repo_registration_rejects_non_integer_timeout(tmp_path, monkeypatch):
     assert "정수만 허용" in stream.getvalue()
 
 
-def test_repo_registration_handles_empty_projects_md(tmp_path, monkeypatch):
+def test_repo_registration_handles_empty_projects_toml(tmp_path, monkeypatch):
     env_path = _seed_full_env(tmp_path, monkeypatch)
-    projects_path = tmp_path / "projects.md"  # does not exist
+    projects_path = tmp_path / "projects.toml"  # does not exist
     repo_dir = tmp_path / "dir"
     repo_dir.mkdir()
     plain = [
@@ -417,16 +413,21 @@ def test_repo_registration_handles_empty_projects_md(tmp_path, monkeypatch):
     assert "myrepo" in load_registry(str(projects_path))
 
 
+def _write_seed_projects_toml(path, repo_dir, name="existing"):
+    path.write_text(
+        f'[{name}]\n'
+        f'path = "{repo_dir}"\n'
+        f'default_branch = "main"\n'
+        f'test_timeout = 600\n'
+    )
+
+
 def test_repo_registration_skip_when_existing_and_not_force(tmp_path, monkeypatch):
     env_path = _seed_full_env(tmp_path, monkeypatch)
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     repo_dir = tmp_path / "dir"
     repo_dir.mkdir()
-    projects_path.write_text(
-        "| 이름 | 경로 | 기본 브랜치 | 원격 | 테스트 명령 | 테스트 타임아웃(초) |\n"
-        "|---|---|---|---|---|---|\n"
-        f"| existing | {repo_dir} | main | origin | - | 600 |\n"
-    )
+    _write_seed_projects_toml(projects_path, repo_dir)
     # No prompts expected — wizard should print "추가 등록 생략" and return
     _scripted_input(monkeypatch, plain=[], secret=[])
     stream = io.StringIO()
@@ -581,15 +582,11 @@ def test_validate_tokens_skips_jira_probe_when_keys_missing(monkeypatch):
 
 def test_run_with_invalid_keys_reprompts_those_only(tmp_path, monkeypatch):
     env_path = _seed_full_env(tmp_path, monkeypatch)
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     # existing repo so wizard skips repo prompt
     repo_dir = tmp_path / "dir"
     repo_dir.mkdir()
-    projects_path.write_text(
-        "| 이름 | 경로 | 기본 브랜치 | 원격 | 테스트 명령 | 테스트 타임아웃(초) |\n"
-        "|---|---|---|---|---|---|\n"
-        f"| ex | {repo_dir} | main | origin | - | 600 |\n"
-    )
+    _write_seed_projects_toml(projects_path, repo_dir, name="ex")
     # Only JIRA_API_TOKEN should be re-prompted
     _scripted_input(monkeypatch, plain=[], secret=["new-jira-token-90909090"])
     stream = io.StringIO()
@@ -607,14 +604,10 @@ def test_run_with_invalid_keys_does_not_show_old_value_as_current(
     tmp_path, monkeypatch,
 ):
     env_path = _seed_full_env(tmp_path, monkeypatch)
-    projects_path = tmp_path / "projects.md"
+    projects_path = tmp_path / "projects.toml"
     repo_dir = tmp_path / "dir"
     repo_dir.mkdir()
-    projects_path.write_text(
-        "| 이름 | 경로 | 기본 브랜치 | 원격 | 테스트 명령 | 테스트 타임아웃(초) |\n"
-        "|---|---|---|---|---|---|\n"
-        f"| ex | {repo_dir} | main | origin | - | 600 |\n"
-    )
+    _write_seed_projects_toml(projects_path, repo_dir, name="ex")
     captured_prompts: list[str] = []
 
     def fake_getpass(prompt=""):

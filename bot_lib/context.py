@@ -19,7 +19,7 @@ from typing import Optional
 class Context:
     repo: str
     remote: str
-    branch: Optional[str] = None  # None → use projects.md default_branch
+    branch: Optional[str] = None  # None → use projects.toml default_branch
     who: Optional[str] = None     # None → fall back to env BOT_USER, then no-namespace
 
 
