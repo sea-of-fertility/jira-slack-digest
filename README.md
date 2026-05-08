@@ -9,7 +9,7 @@
 
 봇의 명령 카탈로그·동작은 [`FEATURES.md`](./FEATURES.md), 설계 의도는 [`plan.md`](./plan.md), AI 자동 세팅 가이드는 [`AGENTS.md`](./AGENTS.md) 참조.
 
-> **⚡ 빠른 setup** — 디지스트만 쓰든 봇까지 쓰든, `.venv` 활성화 + `pip install -e .` 후 `jira-bot --setup` 한 번 실행하면 인터랙티브 wizard 가 토큰·이메일·repo 등록까지 묻습니다 (시크릿은 `getpass` 마스킹). 수동으로 하려면 아래 1~5장을 순서대로 따라가세요.
+> **⚡ 빠른 setup** — 디지스트만 쓰든 봇까지 쓰든, `.venv` 활성화 + `pip install -e .` 후 그냥 `jira-bot` 만 실행하면 끝납니다. 매 기동마다 `.env` 의 토큰을 Jira `/myself` · Slack `auth.test` 로 라이브 검증하고, 누락이거나 만료됐으면 그 키만 인터랙티브 wizard 가 다시 묻고 (시크릿은 `getpass` 마스킹), 그대로 봇이 돌기 시작합니다. 수동으로 하려면 아래 1~5장을 순서대로 따라가세요.
 
 ---
 
@@ -187,19 +187,24 @@ cron은 잠든 맥에서는 안 뜹니다. 필요하면 `launchd`로 감싸거�
 # 1) 의존성 (디지스트와 같은 .venv 사용 — 4장에서 `pip install -e .` 끝났다고 가정)
 source .venv/bin/activate
 
-# 2) 처음 또는 토큰 갱신 시 — wizard 가 .env / projects.md 한 번에 묻습니다
-jira-bot --setup
-
-# 3) 평소 실행 (foreground 시연용)
+# 2) 봇 실행 — 한 명령으로 검증 → (필요 시) 입력 → 실행이 한 번에 끝남
 jira-bot
+#  → .env 누락/잘못된 토큰이 있으면 그 키만 wizard 가 묻고, 입력 후 그대로 봇이 시작됩니다.
+#  → 모두 유효하면 즉시 Socket Mode 진입.
+
+# (선택) wizard 만 돌리고 끝내고 싶을 때 — launchd 가 봇 재기동
+jira-bot --setup
 ```
+
+> **토큰 라이브 검증** — 매 기동마다 Jira `GET /rest/api/3/myself`, Slack `auth.test` 를 호출해 401/`invalid_auth` 를 잡습니다. `SLACK_APP_TOKEN` (`xapp-…`)·`SLACK_USER_ID` (`U…`) 는 호출 가능한 검증 엔드포인트가 없어 형식만 검사합니다. 비대화 환경(launchd) 에서 검증 실패 시 stderr 에 어느 키가 어떤 이유로 거부됐는지 찍고 exit 2 — 터미널에서 `jira-bot --setup` 으로 갱신.
 
 ### 명령 카탈로그 (요약)
 
 | 명령 | 동작 |
 |---|---|
 | `run <type> <issue> [-d <지시문>]` | claude 호출 → 코드 변경 → 테스트 → 커밋 → PR (`<type>`: fix/feat/refactor/chore/docs/test/perf) |
-| `jira create -k <분류> -t <제목> [-d <본문>]` | Jira 이슈 생성 (분류: 에픽/작업/버그/스토리) |
+| `jira create -k <분류> -t <제목> [-d <본문>]` | Jira 이슈 생성 (분류: 에픽/작업/버그/스토리, 프로젝트 CDS 고정) |
+| `jira get [-s <상태>] [-p <키\|all>]` | 내 이슈 조회 (assignee=나) — 기본 CDS / `-p all` 로 전 프로젝트, 최대 20개 |
 | `init <repo> [-r <remote>] [-b <branch>]` | 세션 컨텍스트 저장 — 이후 `run` 명령에서 repo 자동 사용 |
 | `who [<name>] / who clear` | 브랜치 namespace `<type>/<who>/<issue>` 용 사용자 이름 |
 | `repo / remote / branch / find / status` | 조회 (read-only) |
@@ -249,9 +254,9 @@ macOS 가 시스템 sleep 에 들어가면 launchd 봇도 정지됩니다. 외�
 jira_daily_digest.py     # A. Daily Digest 메인 스크립트
 bot.py                   # B. Slack DM 봇 진입점 (Socket Mode)
 bot_lib/                 # 봇 라이브러리
-├─ commands.py           #   run / jira create 파서
+├─ commands.py           #   run / jira create / jira get 파서
 ├─ registry.py           #   projects.md 파싱
-├─ jira_client.py        #   Jira REST + ADF 변환 + create_issue
+├─ jira_client.py        #   Jira REST + ADF 변환 + create_issue + search_my_issues
 ├─ git_ops.py            #   git 래퍼 (find_files, branches, push, ...)
 ├─ claude_runner.py      #   claude -p Popen + 콜백
 ├─ test_runner.py        #   pytest/gradle 등 외부 테스트 실행
@@ -260,7 +265,7 @@ bot_lib/                 # 봇 라이브러리
 ├─ context.py            #   ContextStore (JSON 영속)
 ├─ mutex.py              #   RepoMutex (repo 단위 직렬화)
 ├─ cancellation.py       #   진행 중 claude SIGTERM 추적
-└─ setup_wizard.py       #   --setup 인터랙티브 입력 마법사
+└─ setup_wizard.py       #   인터랙티브 wizard + 매 기동 토큰 라이브 검증
 
 projects.md              # 봇이 다룰 repo 등록 표 (마크다운)
 plan.md                  # 봇 설계 의도·결정사항
@@ -269,14 +274,14 @@ AGENTS.md                # AI 에이전트용 자동 setup 가이드
 launchd/                 # com.hjpark.jira-bot.plist 예시 + README
 .env.example             # 환경 변수 템플릿 (디지스트 + 봇 공용)
 pyproject.toml           # 패키지 메타데이터 + 의존성 + 콘솔 스크립트 (`jira-bot`, `jira-digest`)
-tests/                   # pytest 315건 (live 마커 1건 opt-in)
+tests/                   # pytest 385건 (live 마커 1건 opt-in)
 ```
 
 ---
 
 ## 8. 문제 해결
 
-- `401 Unauthorized`: Jira 이메일/토큰/베이스 URL 다시 확인. 이메일은 표시 이름이 아니라 **로그인 이메일**.
+- `401 Unauthorized`: Jira 이메일/토큰/베이스 URL 다시 확인. 이메일은 표시 이름이 아니라 **로그인 이메일**. (봇 쪽은 매 기동의 라이브 검증이 이 에러를 먼저 잡아 `[error] 유효하지 않은 토큰 — JIRA_API_TOKEN: 401 ...` 로그를 stderr 에 찍고 wizard 를 띄웁니다.)
 - `410 Gone` on `/rest/api/3/search`: Atlassian이 2025년에 해당 엔드포인트를 제거했습니다. 이 저장소는 이미 신 엔드포인트(`/rest/api/3/search/jql`, `nextPageToken` 페이지네이션)를 사용하므로 최신 코드로 받았는지 확인하세요.
 - `not_in_channel` / `channel_not_found`: `SLACK_USER_ID`가 본인 user ID가 맞는지, Slack 앱이 워크스페이스에 설치됐는지 확인.
 - 출력이 너무 길다: 스크립트가 2800자 단위로 자동 청크 분할합니다. 그래도 많으면 `JIRA_EXTRA_JQL`로 범위를 좁히세요.
