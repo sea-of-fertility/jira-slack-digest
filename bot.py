@@ -7,9 +7,10 @@ local PoC; in production the launchd plist (Step 13) supervises it.
 
 Startup: when required env keys are missing, projects.md has no entries,
 or any token fails a live `/myself` / `auth.test` probe, the interactive
-setup wizard launches automatically (TTY only). Non-TTY (launchd) exits
-with status 2 so the user can run `jira-bot --setup` to fix things.
-Pass `--setup` to force the wizard even when everything is valid.
+setup wizard launches automatically (TTY only) and the bot then keeps
+running in the same process — no manual restart needed. Non-TTY
+(launchd) exits with status 2 so the user can run `jira-bot --setup`.
+Pass `--setup` to force the wizard and exit (no bot startup).
 """
 from __future__ import annotations
 
@@ -87,8 +88,12 @@ def main() -> None:
 
     # Live token check on every startup — catches expired/revoked tokens
     # that `missing_env_keys` cannot detect (key is present but invalid).
-    invalid = setup_wizard.validate_tokens()
-    if invalid:
+    # Loop so a TTY user who fat-fingers a token gets re-prompted instead of
+    # the bot crashing on first API call.
+    for _attempt in range(3):
+        invalid = setup_wizard.validate_tokens()
+        if not invalid:
+            break
         sys.stderr.write("[error] 유효하지 않은 토큰:\n")
         for key, msg in invalid:
             sys.stderr.write(f"  - {key}: {msg}\n")
@@ -101,11 +106,10 @@ def main() -> None:
             env_path, projects_path,
             invalid_keys=[k for k, _ in invalid],
         )
-        sys.stderr.write(
-            "[info] 토큰 갱신 완료 — 봇 재시작은 launchd 가 처리합니다 "
-            "(`launchctl kickstart -k gui/$UID/com.hjpark.jira-bot`).\n"
-        )
-        sys.exit(0)
+        load_dotenv(env_path, override=True)
+    else:
+        sys.stderr.write("[error] 토큰 검증 3회 실패 — 종료합니다.\n")
+        sys.exit(2)
 
     context = ContextStore(str(CONTEXT_PATH))
 
