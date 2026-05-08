@@ -1,302 +1,289 @@
-# Jira ↔ Slack ↔ Claude Code 통합 도구
+# Jira ↔ Slack 자동화 도구
 
-이 저장소는 **두 개의 도구**를 함께 제공합니다.
+내 Jira 이슈를 매일 아침 Slack DM 으로 자동 받아보고, 외출 중에도 Slack DM 한 줄로 코드 작업을 시킬 수 있는 개인용 도구입니다.
 
-| 도구 | 진입점 | 역할 |
+> 이 README 는 **개발 경험이 적은 사용자도 따라갈 수 있도록** 설치 위주로 정리돼 있습니다. 명령 옵션·내부 동작 등 더 자세한 내용은 [`FEATURES.md`](./FEATURES.md), 설계 의도는 [`plan.md`](./plan.md), AI 에이전트가 따라가는 자동 setup 스크립트는 [`AGENTS.md`](./AGENTS.md) 참조.
+
+---
+
+## 이 도구로 무엇을 할 수 있나요?
+
+저장소 안에 두 가지 도구가 들어 있습니다. **둘 중 하나만 써도 되고, 둘 다 켜도 됩니다.**
+
+| | 무엇을 하나요? | 누구한테 좋은가요? |
 |---|---|---|
-| **Daily Digest** | `jira_daily_digest.py` | 매일 아침 cron/launchd 로 실행 — 내게 할당된 Jira 이슈를 정리해 Slack DM 발송 |
-| **Slack DM 명령 봇** | `bot.py` + `bot_lib/` | launchd 24/7 상주 — Slack DM 한 줄로 Jira 이슈 fetch → Claude Code 자동 코드 변경 → 테스트 → PR 생성. `jira create` 로 이슈도 만들 수 있음 |
+| **A. Daily Digest** | 매일 아침 내게 할당된 Jira 이슈를 정리·요약해서 Slack DM 으로 보내줍니다. | "오늘 뭐부터 해야 하지?" 를 매일 아침 자동으로 보고 싶은 분 |
+| **B. Slack 명령 봇** | Slack DM 에 한 줄(`run fix CDS-99 ...`) 보내면 봇이 알아서 코드 수정 → 테스트 → PR 생성까지. Slack DM 으로 새 Jira 이슈도 만들 수 있습니다. | 외출 중에도 iPhone Slack 으로 일을 시키고 싶은 분 |
 
-봇의 명령 카탈로그·동작은 [`FEATURES.md`](./FEATURES.md), 설계 의도는 [`plan.md`](./plan.md), AI 자동 세팅 가이드는 [`AGENTS.md`](./AGENTS.md) 참조.
-
-> **⚡ 빠른 setup** — 디지스트만 쓰든 봇까지 쓰든, `.venv` 활성화 + `pip install -e .` 후 그냥 `jira` 만 치면 끝납니다 (= `jira bot`). 매 기동마다 `.env` 의 토큰을 Jira `/myself` · Slack `auth.test` 로 라이브 검증하고, 누락이거나 만료됐으면 그 키만 인터랙티브 wizard 가 다시 묻고 (시크릿은 `getpass` 마스킹), 그대로 봇이 돌기 시작합니다. 수동으로 하려면 아래 1~5장을 순서대로 따라가세요.
+> **처음이라면 A 부터.** A 만 쓰면 Slack 앱 설정이 절반으로 줄고, 결과를 바로 눈으로 확인할 수 있어 검증이 쉽습니다.
 
 ---
 
-## A. Daily Digest
+## 0. 시작하기 전에 — 사전 준비
 
-매일 아침 **내게 할당된 열린 Jira 이슈**를 정리해서 Slack DM으로 받는 스크립트.
+다음이 컴퓨터에 있어야 합니다. 터미널에서 한 줄씩 쳐서 확인해 보세요.
 
-두 단계로 "정리"가 들어갑니다.
+### 0-1. Python 3.11 이상 (필수)
 
-1. **구조적 정리** — 우선순위·마감일 순 정렬 + "지난 마감 / 오늘 마감 / 다가오는 마감 / 마감일 없음" 버킷.
-2. **내용 요약 (선택)** — 각 이슈의 description과 최근 댓글을 LLM에 보내 한국어 1문장(약 80자) 요약을 생성하고, 이슈 라인 아래 "📝 …"로 붙입니다.
+```bash
+python3 --version
+```
 
-요약에는 두 가지 백엔드를 쓸 수 있습니다.
+`Python 3.11.x` 이상이면 OK. 그렇지 않으면:
 
-- **`cli` (기본, 추천)** — 이미 로컬에 깔려 있는 코딩 에이전트 CLI(`claude`, `codex`, `gemini`, `opencode`)를 subprocess로 호출합니다. [cokacdir](https://github.com/kstost/cokacdir)과 같은 방식입니다. 기존 구독(Claude Pro/Max 등) 안에서 돌아가므로 **별도 API 비용이 들지 않습니다.**
-- **`api`** — Anthropic API를 직접 호출. 가장 빠르지만 토큰 비용이 발생합니다.
-- **`none`** — 요약 건너뜀.
+- macOS: https://www.python.org/downloads/ 에서 최신 버전 설치
+- 또는 [Homebrew](https://brew.sh/) 설치 후 `brew install python@3.12`
+
+### 0-2. Git (필수)
+
+```bash
+git --version
+```
+
+`command not found` 가 나오면 macOS 는 `xcode-select --install` 한 줄로 설치됩니다.
+
+### 0-3. (B. 봇만 쓸 때) GitHub CLI + 코딩 에이전트 CLI
+
+봇이 PR 을 만들려면 [GitHub CLI](https://cli.github.com/) 가 필요합니다. macOS 는 `brew install gh && gh auth login`.
+
+또한 코드를 자동으로 고쳐줄 코딩 에이전트 CLI 가 한 개 깔려 있고 로그인돼 있어야 합니다. 추천: [Claude Code](https://docs.claude.com/en/docs/claude-code/quickstart) (`claude` 명령). 이미 평소에 쓰고 있다면 추가 설정 없음.
+
+> A 디지스트만 쓸 거면 0-3 은 건너뛰어도 됩니다. (디지스트도 요약을 만들 때 코딩 에이전트 CLI 를 쓸 수는 있지만, 없어도 요약만 빠지고 동작합니다.)
 
 ---
 
-## 1. Jira API 토큰 발급
+## 1. 토큰 발급 — Jira·Slack 에서 "비밀번호 같은 것" 받아오기
 
-1. https://id.atlassian.com/manage-profile/security/api-tokens 접속
-2. **Create API token** → 이름 아무거나(예: `daily-digest`) → **Copy**
-3. 이 토큰을 `.env`의 `JIRA_API_TOKEN`에 넣고, 계정 이메일을 `JIRA_EMAIL`에 넣습니다.
-4. `JIRA_BASE_URL`은 `https://<회사>.atlassian.net` 형태.
+이 도구가 내 Jira·Slack 에 접속하려면 두 서비스에서 **토큰(token)** 을 발급받아야 합니다. 토큰은 비밀번호처럼 다뤄야 하고, 이 저장소는 토큰이 git 에 올라가지 않도록 `.gitignore` 에 미리 막아뒀습니다.
 
-## 2. Slack 앱 만들고 DM 권한 주기
+발급받은 값은 **메모장에 임시로 모아두세요.** 다음 장에서 한꺼번에 입력하게 됩니다.
 
-1. https://api.slack.com/apps → **Create New App** → *From scratch* → 워크스페이스 선택
-2. 좌측 **OAuth & Permissions**
-3. **Bot Token Scopes**에 다음 두 개 추가:
-   - `chat:write`
-   - `im:write` (봇이 사용자에게 DM 열 수 있음)
-4. 상단 **Install to Workspace** → 설치 → **Bot User OAuth Token** (`xoxb-...`) 복사 → `.env`의 `SLACK_BOT_TOKEN`
-5. **본인 Slack 유저 ID 찾기**: Slack에서 본인 프로필 클릭 → 점 세 개(`⋮`) → **Copy member ID** → `U01ABC23DEF` 같은 값 → `.env`의 `SLACK_USER_ID`
-6. 설치한 봇이 본인한테 DM을 보내려면, Slack에서 앱 이름으로 DM 창을 한 번 열어 대화방을 생성해 두면 가장 매끄럽습니다. (`im:write` 스코프가 있으면 자동으로도 됩니다.)
-7. **(봇 부분 사용 시 추가)** Socket Mode 용 App-Level Token 발급 — **Basic Information** → 아래쪽 **App-Level Tokens** → *Generate Token and Scopes* → scope `connections:write` 추가 → Generate → `xapp-...` 값 → `.env`의 `SLACK_APP_TOKEN`. 추가로 좌측 메뉴에서 **Socket Mode** 토글 ON, **App Home → Messages Tab** ON + "Allow users to send Slash commands and messages from the messages tab" 체크, **Event Subscriptions** ON + bot events 에 `message.im`/`app_mention` 추가. 자세한 체크리스트는 `AGENTS.md §1.1` 참조. (디지스트만 쓸 거면 이 7번은 건너뛰어도 됩니다.)
+### 1-1. Jira API 토큰
 
-## 3. 요약 백엔드 설정
+1. https://id.atlassian.com/manage-profile/security/api-tokens 접속 (Atlassian 계정 로그인)
+2. **Create API token** 클릭 → 이름은 아무거나 (예: `daily-digest`) → **Create**
+3. **Copy** 로 복사 — 이 화면을 닫으면 다시 못 봅니다.
 
-### 3-A. CLI 백엔드 (추천, API 비용 없음)
+### 1-2. Slack 봇 만들기 (A·B 공통)
 
-Claude Code, Codex CLI, Gemini CLI, OpenCode 중 하나가 깔려 있고 로그인돼 있어야 합니다. 이미 쓰고 계시다면 추가 설정은 거의 없습니다.
+1. https://api.slack.com/apps 접속 → **Create New App** → **From scratch** → 본인 워크스페이스 선택, 이름 아무거나 (예: `My Jira Helper`)
+2. 좌측 **OAuth & Permissions** → **Bot Token Scopes** → **Add an OAuth Scope** 두 개 추가:
+   - `chat:write` (DM 보내기)
+   - `im:write` (DM 채널 열기)
+3. 페이지 상단으로 돌아가 **Install to Workspace** → 권한 허용
+4. 설치 직후 보이는 **Bot User OAuth Token** (`xoxb-...` 로 시작) 복사
+5. **본인 Slack 사용자 ID 확인**: Slack 앱에서 본인 프로필 클릭 → 점 세 개(`⋮`) 메뉴 → **Copy member ID** → `U01ABC23DEF` 형태의 값
 
-```bash
-# 설치 확인 (예: Claude Code)
-which claude
-claude --version
+### 1-3. (B. 봇 쓸 때만) Slack 추가 설정
 
-# 헤드리스 모드 동작 확인 - 프롬프트 한 줄 답변이 와야 정상
-echo "Say hi in Korean" | claude -p
-```
+봇이 DM 을 **받으려면** 같은 Slack 앱 페이지에서 4가지를 더 켜야 합니다.
 
-`.env`에서 사용할 CLI를 지정합니다.
+1. 좌측 **Basic Information** → 아래쪽 **App-Level Tokens** → **Generate Token and Scopes** → scope `connections:write` 추가 → **Generate** → `xapp-...` 토큰 복사
+2. 좌측 **Socket Mode** → 토글 ON
+3. 좌측 **App Home** → **Show Tabs** 섹션 → **Messages Tab** 토글 ON, 그 아래 체크박스 **"Allow users to send Slash commands and messages from the messages tab"** 체크 ✅
+4. 좌측 **Event Subscriptions** → 토글 ON → **Subscribe to bot events** 에 `message.im` · `app_mention` 추가
+5. 페이지 상단에 "reinstall your app" 배너가 뜨면 클릭
 
-```bash
-LLM_BACKEND=cli
-LLM_CLI="claude -p --model haiku"   # 공백이 들어가면 반드시 따옴표로 감쌀 것
-LLM_CLI_TIMEOUT=90
-```
+> 4단계 중 하나라도 빠지면 Slack 메시지가 봇에게 도달조차 안 합니다. 자세한 체크리스트는 [`AGENTS.md` §1.1](./AGENTS.md) 참조.
 
-> **팁 — 값은 따옴표로 감싸기.** `source .env` 로 로드할 때 공백이 있는 값(`claude -p ...`)을 따옴표 없이 두면 shell이 `-p` 를 명령어로 오해해 `command not found: -p` 경고가 납니다. 동작에는 영향 없지만, 잡음이 거슬리면 `"..."` 또는 `'...'` 로 감싸세요.
->
-> **팁 — `--model haiku` 로 요금/쿼터 절약.** Claude Code CLI 기본 모델 대신 Haiku를 쓰면 Jira 요약처럼 가벼운 작업에서 **입력 $1/MTok, 출력 $5/MTok** 수준으로 떨어지고 응답 속도도 빠릅니다. 품질은 80자 한 문장 요약엔 충분합니다. `claude -p --model sonnet`, `--model opus` 등도 가능합니다.
+### 정리: 받아둔 값 체크
 
-스크립트는 `LLM_CLI`에 적힌 명령을 그대로 subprocess로 띄우고, 프롬프트를 **stdin으로 파이프**합니다. 그래서 위의 4개 외에 `-p`/stdin 조합을 받는 다른 CLI도 대부분 꽂아 쓸 수 있습니다. 동시 실행은 기본 3개로 제한합니다(구독 rate limit 보호).
+| 값 | 형태 | 어디서 |
+|---|---|---|
+| Jira 회사 도메인 | `https://회사명.atlassian.net` | 평소 쓰는 Jira URL 의 루트 |
+| Jira 로그인 이메일 | `you@company.com` | Jira 로그인 이메일 (표시 이름 X) |
+| Jira API 토큰 | `ATATT3xFf...` | 1-1 |
+| Slack Bot Token | `xoxb-...` | 1-2 step 4 |
+| Slack 사용자 ID | `U01ABC23DEF` | 1-2 step 5 |
+| (B 만) Slack App Token | `xapp-...` | 1-3 step 1 |
 
-### 3-B. API 백엔드 (선택)
+---
 
-CLI를 안 쓰고 API로만 돌리고 싶으면 https://console.anthropic.com/ 에서 키 발급 후:
+## 2. 설치
 
-```bash
-LLM_BACKEND=api
-ANTHROPIC_API_KEY=sk-ant-...
-# LLM_MODEL=claude-haiku-4-5-20251001   # 기본값
-```
-
-Haiku 기준 이슈 20건이어도 하루 약 1~2센트 수준입니다.
-
-### 3-C. 요약 꺼두기
-
-`LLM_BACKEND=none` 또는 실행 시 `--no-llm` 플래그.
-
-## 4. 설치 & 로컬 테스트
+터미널에서 이 저장소 폴더로 이동한 뒤:
 
 ```bash
-cd <이 폴더>
+# 가상환경 만들기 (이 도구만의 격리된 Python 공간)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .              # 봇·디지스트 + 의존성 설치, `jira` 콘솔 스크립트 등록
-# pip install -e ".[dev]"     # 테스트도 돌릴 거면 (pytest 포함)
 
-cp .env.example .env
-# .env 파일을 열어 실제 값으로 교체  (또는 `jira setup` 으로 wizard 사용)
+# 도구 설치 — 30초~1분
+pip install -e .
+```
 
-# 환경 변수 로드
-set -a; source .env; set +a
+설치가 끝나면 `jira` 라는 새 명령어가 등록됩니다.
 
-# mock 데이터 + 요약 스킵 → 완전 오프라인, 블록 구조만 확인
-jira digest --mock --dry-run --no-llm
+> **터미널을 새로 열 때마다** `source .venv/bin/activate` 를 한 번 쳐야 `jira` 명령이 잡힙니다. 안 그러면 `command not found: jira`.
 
-# mock 데이터 + CLI 요약 테스트 (Slack 안 보냄)
-jira digest --mock --dry-run --backend cli
+---
 
-# 실제 Jira 조회 + 요약까지 하되 Slack 안 보내고 페이로드만 출력
+## 3. 첫 실행 — 자동 설정 마법사
+
+설정 파일을 손으로 만들 필요 없습니다. 그냥:
+
+```bash
+jira
+```
+
+라고 치면 마법사(wizard)가 떠서 §1 에서 받아둔 값들을 하나씩 물어봅니다.
+
+- **시크릿(토큰) 입력은 화면에 표시되지 않습니다** — 안심하고 붙여넣기 (cmd+V)
+- 입력이 끝나면 Jira·Slack 에 실제로 통화해서 **토큰이 살아있는지 검증**
+- 통과하면 그대로 봇 실행 (B), 검증만 하고 끝내고 싶으면 `Ctrl+C`
+- 토큰이 잘못됐으면 **그 키만** 다시 물어봄 (멀쩡한 값은 그대로)
+
+이후 토큰이 만료됐거나 값을 바꾸고 싶으면 `jira setup` 을 다시 실행하면 됩니다.
+
+---
+
+## 4. (A) Daily Digest 사용하기
+
+### 4-1. 먼저 미리보기 (Slack 안 보냄)
+
+```bash
 jira digest --dry-run
+```
 
-# 진짜 실행 (Slack DM 전송)
+`📋 Jira 할당 이슈 N건` 같은 로그가 뜨고, Slack 으로 보낼 메시지의 형태가 콘솔에 출력됩니다. 이슈가 0건이라고 뜨면 Jira 에서 본인한테 할당된 열린 이슈가 없거나, JQL 필터(아래 §4-4) 가 너무 빡빡한 것.
+
+### 4-2. 진짜로 Slack DM 받아보기
+
+```bash
 jira digest
 ```
 
-## 5. 매일 아침 9시에 자동 실행 (cron)
+본인 Slack 에 DM 이 도착했는지 확인.
 
-`crontab -e` 로 열고 추가:
+### 4-3. 매일 아침 9시에 자동으로 받기 (cron)
 
-```cron
-# 평일 오전 9:00 Jira digest
-0 9 * * 1-5 /absolute/path/to/.venv/bin/jira digest >> /absolute/path/to/digest.log 2>&1
-```
-
-환경 변수는 cron이 기본적으로 읽어주지 않으니, 두 가지 중 하나:
-
-**방법 A — 래퍼 스크립트 사용**
-
-`run.sh`:
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")"
-set -a; source .env; set +a
-./.venv/bin/jira digest
-```
-
-```bash
-chmod +x run.sh
-```
-
-crontab:
-```cron
-0 9 * * 1-5 /absolute/path/to/run.sh >> /absolute/path/to/digest.log 2>&1
-```
-
-**방법 B — crontab 안에 직접 export**
+`crontab -e` 를 터미널에서 열고 (vim 이 뜹니다 — `i` 누르면 입력, `Esc` 후 `:wq` 로 저장):
 
 ```cron
-0 9 * * 1-5 JIRA_BASE_URL=https://... JIRA_EMAIL=... JIRA_API_TOKEN=... SLACK_BOT_TOKEN=xoxb-... SLACK_USER_ID=U... /path/.venv/bin/jira digest
+0 9 * * 1-5 /이/저장소의/절대경로/.venv/bin/jira digest >> /이/저장소의/절대경로/digest.log 2>&1
 ```
 
-### macOS에서 맥이 자고 있어도 실행되게 하려면
+위 한 줄이면 평일 오전 9시마다 자동 실행됩니다.
 
-cron은 잠든 맥에서는 안 뜹니다. 필요하면 `launchd`로 감싸거나, GitHub Actions cron을 쓰시면 됩니다 (secrets에 토큰 넣고 `.github/workflows/digest.yml`에서 `on: schedule`).
+> **macOS 노트북이 자고 있으면 cron 은 안 뜹니다.** 항상 켜둘 자신이 없으면 GitHub Actions 같은 클라우드 cron 으로 옮기는 것을 고려하세요. (고급 — 이 README 범위 밖)
 
-## 6. 커스터마이즈 팁 (디지스트)
+### 4-4. 자주 쓰는 커스터마이즈
 
-- **특정 프로젝트만**: `.env`에 `JIRA_EXTRA_JQL='project = ABC'` 같은 식으로 추가. (값에 공백이 있으면 따옴표 필수.)
-- **To Do 상태만 보내기** (추천): `JIRA_EXTRA_JQL='statusCategory = "To Do"'` — 언어 중립적이라 한글 Jira(`해야 할 일`)에서도 그대로 동작합니다. `"In Progress"` 도 포함하려면 `JIRA_EXTRA_JQL='statusCategory in ("To Do", "In Progress")'`.
-- **다른 정렬**: `jira_daily_digest.py`의 `sort_issues()` 안 `key` 함수 조정.
-- **주말 제외 / 공휴일 제외**: cron의 `1-5`가 월~금. 더 정교하게는 스크립트 상단에서 `date.today().weekday()` 체크.
-- **출력 포맷 변경**: `format_issue_line()` / `build_slack_blocks()` 수정.
-- **여러 사람에게 보내기**: `SLACK_USER_ID`를 리스트로 받고 루프 돌리는 식으로 확장.
+`.env` 파일에서 한 줄을 추가/수정하면 됩니다 (`jira setup` 으로 넣어도 되고, 직접 편집해도 됨):
 
-- **요약 톤/길이**: `jira_daily_digest.py`의 `SUMMARY_SYSTEM` 문구 수정. "1문장 80자"를 "2문장 150자"로 바꾸거나, "진행 현황"에 더 무게를 둘지 "무엇을 해야 하는지"에 둘지 지시 바꿀 수 있음.
-- **요약 대상 제한**: 요약 비용이 걱정되면 `summarize_all()` 호출 전에 `issues = [i for i in issues if i['priority'] in ('Highest', 'High')]` 같은 필터 추가.
+- **할 일 상태만 보내기** (추천): `JIRA_EXTRA_JQL='statusCategory = "To Do"'`
+- **특정 프로젝트만**: `JIRA_EXTRA_JQL='project = ABC'`
+- **요약 끄기**: `LLM_BACKEND=none`
+
+더 다양한 커스터마이즈 (요약 톤 변경, 정렬 기준, 출력 포맷, API 백엔드 사용 등) 는 [`AGENTS.md` §2](./AGENTS.md), 또는 `jira_daily_digest.py` 의 `sort_issues()` / `format_issue_line()` / `SUMMARY_SYSTEM` 부분 참조.
 
 ---
 
-## B. Slack DM 명령 봇 (`bot.py`)
+## 5. (B) Slack 명령 봇 사용하기
 
-외출 중 iPhone Slack DM 한 줄로 Jira 이슈 fetch → Claude Code 자동 코드 변경 → 테스트 → 커밋 → push → PR 생성까지 자동화하는 봇. 단일 사용자 / 단일 맥 / launchd 24/7.
+### 5-1. 다룰 코드 저장소 등록 — `projects.toml`
 
-### 빠른 시작
+봇이 작업할 코드 저장소를 `projects.toml` 에 적습니다. 한 섹션 = 한 저장소.
 
-```bash
-# 1) 의존성 (디지스트와 같은 .venv 사용 — 4장에서 `pip install -e .` 끝났다고 가정)
-source .venv/bin/activate
-
-# 2) 봇 실행 — 한 명령으로 검증 → (필요 시) 입력 → 실행이 한 번에 끝남
-jira             # = `jira bot` (기본 동작)
-#  → .env 누락/잘못된 토큰이 있으면 그 키만 wizard 가 묻고, 입력 후 그대로 봇이 시작됩니다.
-#  → 모두 유효하면 즉시 Socket Mode 진입.
-
-# (선택) wizard 만 돌리고 끝내고 싶을 때 — launchd 가 봇 재기동
-jira setup
+```toml
+[my-api]
+path = "/Users/내이름/dev/my-api"      # 이 컴퓨터의 절대 경로
+default_branch = "main"                # 기본 브랜치
+remote = "origin"                      # (선택) git remote 이름, 기본값 "origin"
+test_cmd = "pytest"                    # (선택) 테스트 명령. 비우면 테스트 스킵
 ```
 
-`jira` 한 명령에 모든 동작이 subcommand 로 모입니다:
+여러 저장소를 등록하려면 섹션을 더 추가합니다.
 
-| 명령 | 동작 |
+### 5-2. 봇 켜기
+
+```bash
+jira
+```
+
+`✓ Bot started` 로그가 뜨면, Slack 에서 봇 앱과의 DM 창을 열고 한 줄 보내보세요:
+
+```
+help
+```
+
+봇이 사용 가능한 명령 목록을 답해줍니다.
+
+### 5-3. 자주 쓰는 명령
+
+| Slack DM 한 줄 | 봇이 하는 일 |
 |---|---|
-| `jira` 또는 `jira bot` | Slack DM 봇 시작 (기본) |
-| `jira setup` | 설정 wizard 단독 실행 |
-| `jira validate` | 토큰 라이브 검증만, 결과 출력 후 종료 |
-| `jira status` | launchd 상태 + .env 키 마스킹 + projects.toml 요약 |
-| `jira install` / `uninstall` | launchd plist 복사·bootstrap / 해제 |
-| `jira logs [-f] [--err]` | `~/Library/Logs/jira-bot{,.err}.log` tail |
-| `jira digest [...]` | Daily digest 1회 (cron 에서도 사용) |
+| `help` | 사용법 보기 |
+| `init my-api` | 이번 세션에서 다룰 저장소 지정 |
+| `run fix CDS-99 -d 버튼이 두 번 클릭됨` | CDS-99 이슈 fetch → 코드 수정 → 테스트 → 커밋 → PR 생성까지 |
+| `jira create -k 버그 -t 로그인 안 됨` | Jira 에 새 이슈 등록 |
+| `jira get` | 내가 맡은 이슈 목록 |
+| `cancel my-api` | 진행 중인 작업 즉시 중단 |
+| `cleanup my-api` | 작업 도중 깨진 워킹 트리 초기화 |
 
-> **토큰 라이브 검증** — 매 기동마다 Jira `GET /rest/api/3/myself`, Slack `auth.test` 를 호출해 401/`invalid_auth` 를 잡습니다. `SLACK_APP_TOKEN` (`xapp-…`)·`SLACK_USER_ID` (`U…`) 는 호출 가능한 검증 엔드포인트가 없어 형식만 검사합니다. 비대화 환경(launchd) 에서 검증 실패 시 stderr 에 어느 키가 어떤 이유로 거부됐는지 찍고 exit 2 — 터미널에서 `jira setup` 으로 갱신.
+`run` 의 `<type>` 자리에 들어갈 수 있는 값: `fix` / `feat` / `refactor` / `chore` / `docs` / `test` / `perf`. 전체 명령 카탈로그·옵션은 [`FEATURES.md`](./FEATURES.md).
 
-### 명령 카탈로그 (요약)
+### 5-4. 24시간 켜두기 (launchd)
 
-| 명령 | 동작 |
-|---|---|
-| `run <type> <issue> [-d <지시문>]` | claude 호출 → 코드 변경 → 테스트 → 커밋 → PR (`<type>`: fix/feat/refactor/chore/docs/test/perf) |
-| `jira create -k <분류> -t <제목> [-d <본문>]` | Jira 이슈 생성 (분류: 에픽/작업/버그/스토리, 프로젝트 CDS 고정) |
-| `jira get [-s <상태>] [-p <키\|all>]` | 내 이슈 조회 (assignee=나) — 기본 CDS / `-p all` 로 전 프로젝트, 최대 20개 |
-| `init <repo> [-r <remote>] [-b <branch>]` | 세션 컨텍스트 저장 — 이후 `run` 명령에서 repo 자동 사용 |
-| `who [<name>] / who clear` | 브랜치 namespace `<type>/<who>/<issue>` 용 사용자 이름 |
-| `repo / remote / branch / find / status` | 조회 (read-only) |
-| `cancel <repo>` | 진행 중 claude SIGTERM |
-| `cleanup <repo>` | 워킹 트리 `git reset --hard` + `clean -fd` |
-| `clear` | 세션 컨텍스트 삭제 |
-| `help` / `도움말` | 전체 사용법 |
-
-자세한 동작·옵션은 [`FEATURES.md`](./FEATURES.md), 설계 의도는 [`plan.md`](./plan.md).
-
-### 24/7 상주화 (launchd)
+맥에서 봇을 항상 켜두려면:
 
 ```bash
-# plist 위치
-~/Library/LaunchAgents/local.jira-bot.plist
-
-# 코드 변경 후 재기동
-launchctl kickstart -k gui/$(id -u)/local.jira-bot
-
-# 로그
-~/Library/Logs/jira-bot.log
-~/Library/Logs/jira-bot.err.log
+jira install     # macOS launchd 에 등록
+jira status      # 동작 상태 확인
+jira logs -f     # 로그 실시간 보기
+jira logs --err  # 에러 로그만
+jira uninstall   # 해제
 ```
 
-자세한 plist 예시는 [`launchd/`](./launchd) 디렉토리.
-
-### macOS sleep 주의
-
-macOS 가 시스템 sleep 에 들어가면 launchd 봇도 정지됩니다. 외출 중 24/7 동작이 필요하면:
-
-- 시스템 설정 → 배터리 → 전원 어댑터 → "잠자기 방지" 체크
-- 클램쉘 모드 (외부 전원·디스플레이·키보드 연결 시 노트북 닫아도 깨어 있음)
-- 또는 `caffeinate -di .venv/bin/jira bot` 형태로 foreground 실행
-
-### 안전장치
-
-- self-repo 가드, dirty-check (시작 거부)
-- claude 호출당 600s · 전체 30분 cap · 재시도 max 3회
-- `--permission-mode acceptEdits` + `--disallowedTools Bash WebFetch WebSearch`
-- `SLACK_USER_ID` allowlist 외 silent ignore
+> macOS 가 잠들면 봇도 멈춥니다. 시스템 환경설정 → 배터리 → 전원 어댑터 → "잠자기 방지" 체크 권장. 노트북 닫고 외출하려면 클램쉘 모드(외부 전원·디스플레이·키보드 연결) 권장.
 
 ---
 
-## 7. 파일 구성
+## 6. 문제 해결 (FAQ)
 
-```
-jira_daily_digest.py     # A. Daily Digest 메인 스크립트
-bot.py                   # B. Slack DM 봇 진입점 (Socket Mode)
-bot_lib/                 # 봇 라이브러리
-├─ commands.py           #   run / jira create / jira get 파서
-├─ registry.py           #   projects.toml 파싱 (tomllib)
-├─ jira_client.py        #   Jira REST + ADF 변환 + create_issue + search_my_issues
-├─ git_ops.py            #   git 래퍼 (find_files, branches, push, ...)
-├─ claude_runner.py      #   claude -p Popen + 콜백
-├─ test_runner.py        #   pytest/gradle 등 외부 테스트 실행
-├─ orchestrator.py       #   처리 흐름 + 재시도 + token 누적
-├─ slack_handler.py      #   명령 라우팅 + 응답 포매팅
-├─ context.py            #   ContextStore (JSON 영속)
-├─ mutex.py              #   RepoMutex (repo 단위 직렬화)
-├─ cancellation.py       #   진행 중 claude SIGTERM 추적
-└─ setup_wizard.py       #   인터랙티브 wizard + 매 기동 토큰 라이브 검증
+**Q. `command not found: jira` 가 나옵니다.**
+A. 가상환경 활성화가 빠졌습니다. 터미널을 새로 열 때마다 먼저 `source .venv/bin/activate`.
 
-projects.toml            # 봇이 다룰 repo 등록 (TOML, 한 섹션 = 한 repo)
-plan.md                  # 봇 설계 의도·결정사항
-FEATURES.md              # 봇 기능 정의서·명령 카탈로그
-AGENTS.md                # AI 에이전트용 자동 setup 가이드
-launchd/                 # local.jira-bot.plist 예시 + README
-.env.example             # 환경 변수 템플릿 (디지스트 + 봇 공용)
-pyproject.toml           # 패키지 메타데이터 + 의존성 + 단일 콘솔 스크립트 (`jira`)
-jira_cli.py              # `jira <subcommand>` argparse 디스패처
-tests/                   # pytest 385건 (live 마커 1건 opt-in)
-```
+**Q. `401 Unauthorized` — Jira 인증 실패.**
+A. 토큰·이메일 중 하나가 틀렸습니다. `jira setup` 으로 다시 입력. 이메일은 **Jira 로그인 이메일** (표시 이름 X).
+
+**Q. `jira digest` 는 잘 도는데 Slack DM 이 안 옵니다.**
+A. ① Slack 앱에서 만든 봇과 DM 창을 한 번 열어두세요. ② `SLACK_USER_ID` 가 본인 ID 가 맞는지 확인.
+
+**Q. 봇한테 Slack DM 을 보냈는데 답이 없습니다.**
+A. §1-3 의 4가지 (App-Level Token + Socket Mode + Messages Tab + Event Subscriptions) 가 모두 ON 인지 다시 확인. 하나라도 빠지면 메시지가 봇한테 도달조차 안 합니다.
+
+**Q. 토큰을 잘못 입력했어요.**
+A. `jira setup` 을 다시 실행. 빈 입력으로 Enter 하면 기존 값 유지.
+
+**Q. 더 자세한 동작·에러를 보고 싶어요.**
+A. `jira validate` (토큰만 검증), `jira status` (전체 상태), `jira logs -f` (실시간 로그).
+
+**Q. 코드를 바꾼 뒤 봇을 재기동하고 싶어요.**
+A. `launchctl kickstart -k gui/$(id -u)/local.jira-bot`
 
 ---
 
-## 8. 문제 해결
+## 7. 더 알아보기 (개발자용)
 
-- `401 Unauthorized`: Jira 이메일/토큰/베이스 URL 다시 확인. 이메일은 표시 이름이 아니라 **로그인 이메일**. (봇 쪽은 매 기동의 라이브 검증이 이 에러를 먼저 잡아 `[error] 유효하지 않은 토큰 — JIRA_API_TOKEN: 401 ...` 로그를 stderr 에 찍고 wizard 를 띄웁니다.)
-- `410 Gone` on `/rest/api/3/search`: Atlassian이 2025년에 해당 엔드포인트를 제거했습니다. 이 저장소는 이미 신 엔드포인트(`/rest/api/3/search/jql`, `nextPageToken` 페이지네이션)를 사용하므로 최신 코드로 받았는지 확인하세요.
-- `not_in_channel` / `channel_not_found`: `SLACK_USER_ID`가 본인 user ID가 맞는지, Slack 앱이 워크스페이스에 설치됐는지 확인.
-- 출력이 너무 길다: 스크립트가 2800자 단위로 자동 청크 분할합니다. 그래도 많으면 `JIRA_EXTRA_JQL`로 범위를 좁히세요.
-- `--dry-run`으로 항상 먼저 확인하세요. 실제 DM 보내기 전에 Block 구조가 어떻게 생겼는지 JSON으로 찍어줍니다.
-- `요약 실패: ReadTimeout` 같은 메시지가 떠도 스크립트는 멈추지 않고 그 이슈만 요약 없이 전송됩니다. 빈번하면 `summarize_issue`의 `timeout` 값을 늘리세요.
+- 봇 명령 카탈로그·옵션 전체: [`FEATURES.md`](./FEATURES.md)
+- 설계 의도·결정사항: [`plan.md`](./plan.md)
+- AI 에이전트가 자동 setup 시 따라가는 스크립트: [`AGENTS.md`](./AGENTS.md)
+- 환경변수 전체 목록·설명: [`.env.example`](./.env.example)
+- 테스트 실행: `pip install -e ".[dev]"` 후 `pytest` (385건 + opt-in live 1건)
+- 디지스트 안전장치, API 백엔드 사용, mock 모드 (`--mock --dry-run --no-llm`), GitHub Actions cron 등: 위 문서들 참조
+- 봇 안전장치 (self-repo 가드, dirty-check, 호출 cap, allowlist) 는 [`plan.md`](./plan.md) 참조
+
+### 파일 구조 (요약)
+
+```
+jira_daily_digest.py     # A. Daily Digest 메인
+bot.py                   # B. Slack 봇 진입점
+bot_lib/                 # 봇 라이브러리 (commands, jira_client, claude_runner, ...)
+jira_cli.py              # `jira <subcommand>` 디스패처
+projects.toml            # 봇이 다룰 repo 등록
+launchd/                 # local.jira-bot.plist 예시
+.env.example             # 환경변수 템플릿
+pyproject.toml           # 패키지 메타데이터 + 의존성
+tests/                   # pytest
+```
