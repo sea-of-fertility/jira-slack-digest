@@ -70,6 +70,12 @@ def main() -> None:
             )
             sys.exit(2)
         setup_wizard.run(env_path, projects_path, force=args.setup)
+        if args.setup:
+            sys.stderr.write(
+                "[info] setup 완료 — 봇 재시작은 launchd 가 처리합니다 "
+                "(`launchctl kickstart -k gui/$UID/com.hjpark.jira-bot`).\n"
+            )
+            sys.exit(0)
         load_dotenv(env_path, override=True)
         try:
             registry = load_registry(str(projects_path))
