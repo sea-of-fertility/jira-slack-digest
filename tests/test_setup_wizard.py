@@ -432,3 +432,199 @@ def test_repo_registration_skip_when_existing_and_not_force(tmp_path, monkeypatc
     stream = io.StringIO()
     run(env_path, projects_path, stream=stream)
     assert "생략" in stream.getvalue()
+
+
+# ---- validate_tokens ----
+
+
+class _FakeResp:
+    def __init__(self, status_code=200, payload=None, raise_on_json=False):
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 400
+        self._payload = payload or {}
+        self._raise_on_json = raise_on_json
+
+    def json(self):
+        if self._raise_on_json:
+            raise ValueError("not json")
+        return self._payload
+
+
+def _patch_validate_http(monkeypatch, jira_resp=None, slack_resp=None,
+                        jira_exc=None, slack_exc=None):
+    """Stub the GET (Jira /myself) and POST (Slack auth.test) calls
+    that `validate_tokens` makes."""
+    def fake_get(url, auth=None, headers=None, timeout=None):
+        if jira_exc is not None:
+            raise jira_exc
+        return jira_resp
+
+    def fake_post(url, headers=None, timeout=None):
+        if slack_exc is not None:
+            raise slack_exc
+        return slack_resp
+
+    monkeypatch.setattr("bot_lib.setup_wizard.requests.get", fake_get)
+    monkeypatch.setattr("bot_lib.setup_wizard.requests.post", fake_post)
+
+
+_VALID_ENV = {
+    "JIRA_BASE_URL": "https://x.atlassian.net",
+    "JIRA_EMAIL": "me@x.com",
+    "JIRA_API_TOKEN": "tok",
+    "SLACK_BOT_TOKEN": "xoxb-bot",
+    "SLACK_APP_TOKEN": "xapp-app",
+    "SLACK_USER_ID": "U01ABC23DEF",
+}
+
+
+def test_validate_tokens_all_ok(monkeypatch):
+    _patch_validate_http(
+        monkeypatch,
+        jira_resp=_FakeResp(200, {"accountId": "abc"}),
+        slack_resp=_FakeResp(200, {"ok": True}),
+    )
+    assert setup_wizard.validate_tokens(_VALID_ENV) == []
+
+
+def test_validate_tokens_jira_401_blames_token(monkeypatch):
+    _patch_validate_http(
+        monkeypatch,
+        jira_resp=_FakeResp(401),
+        slack_resp=_FakeResp(200, {"ok": True}),
+    )
+    failures = setup_wizard.validate_tokens(_VALID_ENV)
+    keys = [k for k, _ in failures]
+    assert "JIRA_API_TOKEN" in keys
+
+
+def test_validate_tokens_jira_404_blames_base_url(monkeypatch):
+    _patch_validate_http(
+        monkeypatch,
+        jira_resp=_FakeResp(404),
+        slack_resp=_FakeResp(200, {"ok": True}),
+    )
+    failures = setup_wizard.validate_tokens(_VALID_ENV)
+    assert ("JIRA_BASE_URL", "404 — base URL 확인") in failures
+
+
+def test_validate_tokens_slack_bot_invalid(monkeypatch):
+    _patch_validate_http(
+        monkeypatch,
+        jira_resp=_FakeResp(200, {"accountId": "abc"}),
+        slack_resp=_FakeResp(200, {"ok": False, "error": "invalid_auth"}),
+    )
+    failures = setup_wizard.validate_tokens(_VALID_ENV)
+    keys = [k for k, msg in failures]
+    msgs = [msg for _, msg in failures]
+    assert "SLACK_BOT_TOKEN" in keys
+    assert any("invalid_auth" in m for m in msgs)
+
+
+def test_validate_tokens_jira_network_error_blames_url(monkeypatch):
+    import requests as _r
+    _patch_validate_http(
+        monkeypatch,
+        jira_exc=_r.ConnectionError("boom"),
+        slack_resp=_FakeResp(200, {"ok": True}),
+    )
+    failures = setup_wizard.validate_tokens(_VALID_ENV)
+    keys = [k for k, _ in failures]
+    assert "JIRA_BASE_URL" in keys
+
+
+def test_validate_tokens_app_token_format(monkeypatch):
+    _patch_validate_http(
+        monkeypatch,
+        jira_resp=_FakeResp(200, {"accountId": "abc"}),
+        slack_resp=_FakeResp(200, {"ok": True}),
+    )
+    bad = {**_VALID_ENV, "SLACK_APP_TOKEN": "xoxb-not-app"}
+    failures = setup_wizard.validate_tokens(bad)
+    keys = [k for k, _ in failures]
+    assert "SLACK_APP_TOKEN" in keys
+
+
+def test_validate_tokens_user_id_format(monkeypatch):
+    _patch_validate_http(
+        monkeypatch,
+        jira_resp=_FakeResp(200, {"accountId": "abc"}),
+        slack_resp=_FakeResp(200, {"ok": True}),
+    )
+    bad = {**_VALID_ENV, "SLACK_USER_ID": "notauid"}
+    failures = setup_wizard.validate_tokens(bad)
+    keys = [k for k, _ in failures]
+    assert "SLACK_USER_ID" in keys
+
+
+def test_validate_tokens_skips_jira_probe_when_keys_missing(monkeypatch):
+    """Empty/missing Jira keys → no probe, no failure for JIRA_*."""
+    called = {"jira": False}
+
+    def fake_get(*args, **kwargs):
+        called["jira"] = True
+        raise AssertionError("should not probe")
+
+    monkeypatch.setattr("bot_lib.setup_wizard.requests.get", fake_get)
+    monkeypatch.setattr(
+        "bot_lib.setup_wizard.requests.post",
+        lambda *a, **kw: _FakeResp(200, {"ok": True}),
+    )
+    partial = {**_VALID_ENV, "JIRA_API_TOKEN": ""}
+    failures = setup_wizard.validate_tokens(partial)
+    assert called["jira"] is False
+    assert not any(k.startswith("JIRA_") for k, _ in failures)
+
+
+# ---- run() with invalid_keys ----
+
+
+def test_run_with_invalid_keys_reprompts_those_only(tmp_path, monkeypatch):
+    env_path = _seed_full_env(tmp_path, monkeypatch)
+    projects_path = tmp_path / "projects.md"
+    # existing repo so wizard skips repo prompt
+    repo_dir = tmp_path / "dir"
+    repo_dir.mkdir()
+    projects_path.write_text(
+        "| 이름 | 경로 | 기본 브랜치 | 원격 | 테스트 명령 | 테스트 타임아웃(초) |\n"
+        "|---|---|---|---|---|---|\n"
+        f"| ex | {repo_dir} | main | origin | - | 600 |\n"
+    )
+    # Only JIRA_API_TOKEN should be re-prompted
+    _scripted_input(monkeypatch, plain=[], secret=["new-jira-token-90909090"])
+    stream = io.StringIO()
+    run(env_path, projects_path,
+        invalid_keys=["JIRA_API_TOKEN"], stream=stream)
+    parsed = _read_env_file(env_path)
+    assert parsed["JIRA_API_TOKEN"] == "new-jira-token-90909090"
+    # Other values preserved
+    assert parsed["JIRA_EMAIL"]
+    assert parsed["SLACK_BOT_TOKEN"]
+    assert "유효하지 않은 토큰" in stream.getvalue()
+
+
+def test_run_with_invalid_keys_does_not_show_old_value_as_current(
+    tmp_path, monkeypatch,
+):
+    env_path = _seed_full_env(tmp_path, monkeypatch)
+    projects_path = tmp_path / "projects.md"
+    repo_dir = tmp_path / "dir"
+    repo_dir.mkdir()
+    projects_path.write_text(
+        "| 이름 | 경로 | 기본 브랜치 | 원격 | 테스트 명령 | 테스트 타임아웃(초) |\n"
+        "|---|---|---|---|---|---|\n"
+        f"| ex | {repo_dir} | main | origin | - | 600 |\n"
+    )
+    captured_prompts: list[str] = []
+
+    def fake_getpass(prompt=""):
+        captured_prompts.append(prompt)
+        return "fresh-token-12345678901234"
+
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: "")
+    monkeypatch.setattr("bot_lib.setup_wizard.getpass.getpass", fake_getpass)
+    stream = io.StringIO()
+    run(env_path, projects_path,
+        invalid_keys=["JIRA_API_TOKEN"], stream=stream)
+    # The "[현재: …]" suffix must NOT appear for the invalidated key
+    assert all("[현재" not in p for p in captured_prompts)

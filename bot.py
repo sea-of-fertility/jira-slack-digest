@@ -5,9 +5,11 @@ Loads env + projects.md, wires slack_bolt Socket Mode, delegates each DM
 to bot_lib.slack_handler.handle_message. Run via `python bot.py` for the
 local PoC; in production the launchd plist (Step 13) supervises it.
 
-First-run: when required env keys are missing or projects.md has no
-entries, the interactive setup wizard launches automatically (TTY only).
-Pass `--setup` to force the wizard even when everything is filled in.
+Startup: when required env keys are missing, projects.md has no entries,
+or any token fails a live `/myself` / `auth.test` probe, the interactive
+setup wizard launches automatically (TTY only). Non-TTY (launchd) exits
+with status 2 so the user can run `jira-bot --setup` to fix things.
+Pass `--setup` to force the wizard even when everything is valid.
 """
 from __future__ import annotations
 
@@ -66,7 +68,7 @@ def main() -> None:
             sys.stderr.write(
                 "[error] 누락 설정이 있는데 비대화 환경입니다 "
                 f"(env 누락: {missing or '없음'}, repo 등록: {len(registry)}건).\n"
-                "터미널에서 `python bot.py --setup` 을 실행해 주세요.\n"
+                "터미널에서 `jira-bot --setup` 을 실행해 주세요.\n"
             )
             sys.exit(2)
         setup_wizard.run(env_path, projects_path, force=args.setup)
@@ -82,6 +84,28 @@ def main() -> None:
         except (FileNotFoundError, RegistryError) as e:
             sys.stderr.write(f"[error] {projects_path}: {e}\n")
             sys.exit(2)
+
+    # Live token check on every startup — catches expired/revoked tokens
+    # that `missing_env_keys` cannot detect (key is present but invalid).
+    invalid = setup_wizard.validate_tokens()
+    if invalid:
+        sys.stderr.write("[error] 유효하지 않은 토큰:\n")
+        for key, msg in invalid:
+            sys.stderr.write(f"  - {key}: {msg}\n")
+        if not sys.stdin.isatty():
+            sys.stderr.write(
+                "터미널에서 `jira-bot --setup` 을 실행해 주세요.\n"
+            )
+            sys.exit(2)
+        setup_wizard.run(
+            env_path, projects_path,
+            invalid_keys=[k for k, _ in invalid],
+        )
+        sys.stderr.write(
+            "[info] 토큰 갱신 완료 — 봇 재시작은 launchd 가 처리합니다 "
+            "(`launchctl kickstart -k gui/$UID/com.hjpark.jira-bot`).\n"
+        )
+        sys.exit(0)
 
     context = ContextStore(str(CONTEXT_PATH))
 

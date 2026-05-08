@@ -21,7 +21,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+import requests
+from requests.auth import HTTPBasicAuth
+
 from bot_lib.registry import DEFAULT_REMOTE, RegistryError, load_registry
+
+VALIDATE_HTTP_TIMEOUT = 10
 
 
 REQUIRED_ENV_KEYS = (
@@ -90,27 +95,130 @@ def missing_env_keys(env: Optional[dict] = None) -> list[str]:
     return [k for k in REQUIRED_ENV_KEYS if not (src.get(k) or "").strip()]
 
 
+def validate_tokens(env: Optional[dict] = None) -> list[tuple[str, str]]:
+    """Probe each token via its provider. Returns [(env_key, error_msg), ...]
+    for failures; empty list = all OK.
+
+    The Jira and Slack-bot tokens are checked with cheap GET/POST calls
+    (`/rest/api/3/myself`, `auth.test`). `SLACK_APP_TOKEN` cannot be
+    validated without opening a Socket-Mode connection, so we only verify
+    its `xapp-` prefix; the same goes for `SLACK_USER_ID` (`U…` prefix).
+    """
+    src = env if env is not None else os.environ
+    failures: list[tuple[str, str]] = []
+
+    base_url = (src.get("JIRA_BASE_URL") or "").strip().rstrip("/")
+    email = (src.get("JIRA_EMAIL") or "").strip()
+    api_token = (src.get("JIRA_API_TOKEN") or "").strip()
+    if base_url and email and api_token:
+        err = _probe_jira(base_url, email, api_token)
+        if err:
+            failures.append(err)
+
+    bot_token = (src.get("SLACK_BOT_TOKEN") or "").strip()
+    if bot_token:
+        err = _probe_slack_bot(bot_token)
+        if err:
+            failures.append(err)
+
+    app_token = (src.get("SLACK_APP_TOKEN") or "").strip()
+    if app_token and not app_token.startswith("xapp-"):
+        failures.append(("SLACK_APP_TOKEN", "`xapp-` 로 시작해야 합니다"))
+
+    user_id = (src.get("SLACK_USER_ID") or "").strip()
+    if user_id and not re.match(r"^U[A-Z0-9]{6,}$", user_id):
+        failures.append(("SLACK_USER_ID", "`U` + 영숫자 형식이 아닙니다 (예: U01ABC23DEF)"))
+
+    return failures
+
+
+def _probe_jira(base_url: str, email: str, token: str) -> Optional[tuple[str, str]]:
+    """Returns (key, msg) on failure, None on success.
+    The blamed key is JIRA_API_TOKEN since 401 is overwhelmingly a bad token,
+    not a bad URL/email."""
+    try:
+        r = requests.get(
+            base_url + "/rest/api/3/myself",
+            auth=HTTPBasicAuth(email, token),
+            headers={"Accept": "application/json"},
+            timeout=VALIDATE_HTTP_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        return ("JIRA_BASE_URL", f"네트워크 실패 ({type(e).__name__})")
+    if r.status_code == 401:
+        return ("JIRA_API_TOKEN", "401 Unauthorized — 토큰 만료/잘못된 이메일")
+    if r.status_code == 404:
+        return ("JIRA_BASE_URL", "404 — base URL 확인")
+    if not r.ok:
+        return ("JIRA_API_TOKEN", f"HTTP {r.status_code}")
+    return None
+
+
+def _probe_slack_bot(token: str) -> Optional[tuple[str, str]]:
+    """Returns (key, msg) on failure, None on success."""
+    try:
+        r = requests.post(
+            "https://slack.com/api/auth.test",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=VALIDATE_HTTP_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        return ("SLACK_BOT_TOKEN", f"네트워크 실패 ({type(e).__name__})")
+    try:
+        data = r.json()
+    except ValueError:
+        return ("SLACK_BOT_TOKEN", f"비정상 응답 (HTTP {r.status_code})")
+    if not data.get("ok"):
+        return ("SLACK_BOT_TOKEN", f"slack: {data.get('error') or 'unknown'}")
+    return None
+
+
 def run(
     env_path: Path,
     projects_path: Path,
     *,
     force: bool = False,
+    invalid_keys: Optional[list[str]] = None,
     stream=sys.stdout,
 ) -> None:
     """Top-level wizard. Prompts for any missing env keys then optionally
     appends new repo rows to projects.md. Idempotent: existing values are
     preserved unless `force=True` (and even then, an empty input keeps the
     current value).
+
+    `invalid_keys` adds those keys to the prompt list and clears their
+    "current" suggestion so the user can't accidentally keep a known-bad
+    value by hitting Enter.
     """
     print("\n=== jira-bot 설정 wizard ===\n", file=stream)
 
     existing = _read_env_file(env_path)
-    needed = list(REQUIRED_ENV_KEYS) if force else missing_env_keys({**existing, **os.environ})
+    if invalid_keys:
+        print(
+            "❌ 유효하지 않은 토큰 — 새 값을 입력해 주세요: "
+            + ", ".join(invalid_keys) + "\n",
+            file=stream,
+        )
+        for k in invalid_keys:
+            existing.pop(k, None)
+
+    if force:
+        needed = list(REQUIRED_ENV_KEYS)
+    else:
+        needed = missing_env_keys({**existing, **os.environ})
+        if invalid_keys:
+            for k in invalid_keys:
+                if k not in needed:
+                    needed.append(k)
 
     if needed:
         print(f"입력 필요 항목: {len(needed)}개\n", file=stream)
         new_values = _prompt_env_fields(needed, existing, stream=stream)
-        merged = {**existing, **new_values}
+        # When re-prompting invalid keys, write the file by merging on top of
+        # the *full* existing file (incl. the popped keys we cleared above)
+        # so we don't lose unrelated entries on disk.
+        full_existing = _read_env_file(env_path)
+        merged = {**full_existing, **new_values}
         _write_env_file(env_path, merged)
         print(f"\n✅ {env_path} 저장 완료 (권한 600)\n", file=stream)
     else:
