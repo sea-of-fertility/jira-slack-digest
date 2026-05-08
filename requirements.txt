@@ -1,6 +1,0 @@
-requests>=2.31,<3
-slack-bolt>=1.28,<2
-python-dotenv>=1.2,<2
-
-# dev
-pytest>=9,<10

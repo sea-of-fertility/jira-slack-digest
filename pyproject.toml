@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jira-bot"
+version = "0.1.0"
+description = "Slack DM bot + daily Jira digest for personal use"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31,<3",
+    "slack-bolt>=1.28,<2",
+    "python-dotenv>=1.2,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9,<10"]
+
+[project.scripts]
+jira-bot = "bot:main"
+jira-digest = "jira_daily_digest:main"
+
+[tool.setuptools]
+packages = ["bot_lib"]
+py-modules = ["bot", "jira_daily_digest"]
