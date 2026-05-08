@@ -33,6 +33,20 @@ KIND_KO_TO_EN = {
 }
 KIND_EN_CANONICAL = {"epic": "Epic", "task": "Task", "bug": "Bug", "story": "Story"}
 
+# `jira get` — list assigned issues by status
+GET_USAGE = "형식: jira get [-s <todo|inprogress|review|resolved|done|all>]"
+# Maps user-facing alias → exact Jira status name (None = no status filter).
+# NOTE: `review → "In Review"` is an assumption — adjust if your Jira workflow
+# uses "Code Review" / "Review" / etc.
+STATUS_ALIASES: dict[str, Optional[str]] = {
+    "todo": "To Do",
+    "inprogress": "In Progress",
+    "review": "In Review",
+    "resolved": "Resolved",
+    "done": "Done",
+    "all": None,
+}
+
 
 class CommandError(ValueError):
     """User-facing parse failure. The message is shown back in Slack."""
@@ -170,3 +184,50 @@ def parse_create(text: str) -> ParsedCreate:
         )
 
     return ParsedCreate(kind=canonical, title=title, description=description)
+
+
+# ---- jira get ----
+
+
+@dataclass(frozen=True)
+class ParsedGet:
+    status: Optional[str]   # canonical Jira status name; None = no filter (all)
+    alias: str              # the user-facing alias (e.g. "todo", "all") for display
+
+
+def is_get(text: str) -> bool:
+    stripped = text.strip()
+    return stripped == "jira get" or stripped.startswith("jira get ")
+
+
+def parse_get(text: str) -> ParsedGet:
+    """Parse `jira get [-s <alias>]`. Default (no -s) = all."""
+    stripped = text.strip()
+    if not is_get(stripped):
+        raise CommandError(GET_USAGE)
+    rest = stripped[len("jira get"):].strip()
+
+    if not rest:
+        return ParsedGet(status=None, alias="all")
+
+    tokens = rest.split()
+    alias_raw: Optional[str] = None
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "-s":
+            if i + 1 >= len(tokens):
+                raise CommandError("`-s` 다음에 값이 필요합니다.")
+            alias_raw = tokens[i + 1]
+            i += 2
+        else:
+            raise CommandError(f"인식 못한 토큰: `{tok}`. {GET_USAGE}")
+
+    if alias_raw is None:
+        return ParsedGet(status=None, alias="all")
+
+    alias = alias_raw.lower()
+    if alias not in STATUS_ALIASES:
+        valid = ", ".join(STATUS_ALIASES)
+        raise CommandError(f"지원 status: {valid}")
+    return ParsedGet(status=STATUS_ALIASES[alias], alias=alias)

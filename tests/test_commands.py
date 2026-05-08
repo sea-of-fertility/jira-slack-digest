@@ -3,10 +3,13 @@ import pytest
 from bot_lib.commands import (
     CommandError,
     ParsedCreate,
+    ParsedGet,
     is_create,
+    is_get,
     is_help,
     parse,
     parse_create,
+    parse_get,
 )
 
 
@@ -228,3 +231,77 @@ def test_parse_create_rejects_dash_p_as_unknown():
     """-p was removed; bare `-p` outside title-capture is not recognized."""
     with pytest.raises(CommandError, match="인식 못한 토큰"):
         parse_create("jira create -p OTHER -k 작업 -t 제목")
+
+
+# ---- jira get — parse_get / is_get ----
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["jira get", "jira get -s todo", "  jira get  -s done ", "jira get -s all"],
+)
+def test_is_get_true(text):
+    assert is_get(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "get", "jira", "jiraget", "jira create", "run fix CDS-1"],
+)
+def test_is_get_false(text):
+    assert is_get(text) is False
+
+
+def test_parse_get_no_args_defaults_to_all():
+    p = parse_get("jira get")
+    assert isinstance(p, ParsedGet)
+    assert p.alias == "all"
+    assert p.status is None
+
+
+def test_parse_get_explicit_all():
+    p = parse_get("jira get -s all")
+    assert p.alias == "all"
+    assert p.status is None
+
+
+@pytest.mark.parametrize(
+    "alias, jira_status",
+    [
+        ("todo", "To Do"),
+        ("inprogress", "In Progress"),
+        ("review", "In Review"),
+        ("resolved", "Resolved"),
+        ("done", "Done"),
+    ],
+)
+def test_parse_get_status_aliases(alias, jira_status):
+    p = parse_get(f"jira get -s {alias}")
+    assert p.alias == alias
+    assert p.status == jira_status
+
+
+def test_parse_get_alias_case_insensitive():
+    p = parse_get("jira get -s INPROGRESS")
+    assert p.alias == "inprogress"
+    assert p.status == "In Progress"
+
+
+def test_parse_get_rejects_unknown_alias():
+    with pytest.raises(CommandError, match="지원 status"):
+        parse_get("jira get -s blocked")
+
+
+def test_parse_get_rejects_dangling_dash_s():
+    with pytest.raises(CommandError, match="-s.*값"):
+        parse_get("jira get -s")
+
+
+def test_parse_get_rejects_unknown_token():
+    with pytest.raises(CommandError, match="인식 못한 토큰"):
+        parse_get("jira get extra")
+
+
+def test_parse_get_rejects_unknown_flag():
+    with pytest.raises(CommandError, match="인식 못한 토큰"):
+        parse_get("jira get -x todo")

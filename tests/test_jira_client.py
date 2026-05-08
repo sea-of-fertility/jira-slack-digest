@@ -6,11 +6,13 @@ from bot_lib.jira_client import (
     DEFAULT_PROJECT,
     JiraCreatedIssue,
     JiraIssue,
+    JiraIssueSummary,
     _adf_doc_from_text,
     adf_to_text,
     create_issue,
     fetch_issue,
     get_my_account_id,
+    search_my_issues,
 )
 
 
@@ -362,3 +364,143 @@ def test_get_my_account_id_propagates_http_error(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="HTTP 401"):
         get_my_account_id("https://x.com", "e@x.com", "tok")
+
+
+# ---- search_my_issues ----
+
+
+def _summary_payload(*items: tuple[str, str, str]) -> dict:
+    """Each tuple = (key, summary, status_name)."""
+    return {
+        "issues": [
+            {
+                "key": k,
+                "fields": {"summary": s, "status": {"name": st}},
+            }
+            for (k, s, st) in items
+        ],
+    }
+
+
+def test_search_my_issues_constructs_correct_url(monkeypatch):
+    captured = {}
+    _install_fake_post(
+        monkeypatch, _FakeResponse(_summary_payload()), captured,
+    )
+    search_my_issues("https://example.atlassian.net/", "e@x.com", "tok")
+    assert captured["url"] == "https://example.atlassian.net/rest/api/3/search/jql"
+
+
+def test_search_my_issues_default_jql_omits_status(monkeypatch):
+    captured = {}
+    _install_fake_post(
+        monkeypatch, _FakeResponse(_summary_payload()), captured,
+    )
+    search_my_issues("https://x.com", "e@x.com", "tok")
+    jql = captured["json"]["jql"]
+    assert f"project = {DEFAULT_PROJECT}" in jql
+    assert "assignee = currentUser()" in jql
+    assert "status =" not in jql
+    assert "ORDER BY updated DESC" in jql
+
+
+def test_search_my_issues_status_filter_quoted(monkeypatch):
+    captured = {}
+    _install_fake_post(
+        monkeypatch, _FakeResponse(_summary_payload()), captured,
+    )
+    search_my_issues("https://x.com", "e@x.com", "tok", status="In Progress")
+    assert 'status = "In Progress"' in captured["json"]["jql"]
+
+
+def test_search_my_issues_escapes_double_quote_in_status(monkeypatch):
+    captured = {}
+    _install_fake_post(
+        monkeypatch, _FakeResponse(_summary_payload()), captured,
+    )
+    search_my_issues("https://x.com", "e@x.com", "tok", status='Weird"name')
+    assert 'status = "Weird\\"name"' in captured["json"]["jql"]
+
+
+def test_search_my_issues_requests_summary_and_status_fields(monkeypatch):
+    captured = {}
+    _install_fake_post(
+        monkeypatch, _FakeResponse(_summary_payload()), captured,
+    )
+    search_my_issues("https://x.com", "e@x.com", "tok")
+    assert captured["json"]["fields"] == ["summary", "status"]
+
+
+def test_search_my_issues_fetches_limit_plus_one(monkeypatch):
+    captured = {}
+    _install_fake_post(
+        monkeypatch, _FakeResponse(_summary_payload()), captured,
+    )
+    search_my_issues("https://x.com", "e@x.com", "tok", limit=20)
+    assert captured["json"]["maxResults"] == 21
+
+
+def test_search_my_issues_uses_basic_auth(monkeypatch):
+    captured = {}
+    _install_fake_post(
+        monkeypatch, _FakeResponse(_summary_payload()), captured,
+    )
+    search_my_issues("https://x.com", "e@x.com", "tok")
+    assert captured["auth"].username == "e@x.com"
+    assert captured["auth"].password == "tok"
+
+
+def test_search_my_issues_parses_summaries(monkeypatch):
+    captured = {}
+    payload = _summary_payload(
+        ("CDS-1", "first issue", "To Do"),
+        ("CDS-2", "second", "In Progress"),
+    )
+    _install_fake_post(monkeypatch, _FakeResponse(payload), captured)
+    items, has_more = search_my_issues("https://x.com", "e@x.com", "tok", limit=5)
+    assert has_more is False
+    assert len(items) == 2
+    assert isinstance(items[0], JiraIssueSummary)
+    assert items[0].key == "CDS-1"
+    assert items[0].title == "first issue"
+    assert items[0].status == "To Do"
+
+
+def test_search_my_issues_caps_at_limit_and_flags_more(monkeypatch):
+    """Server returns limit+1 → drop the extra, set has_more=True."""
+    captured = {}
+    payload = _summary_payload(
+        *[(f"CDS-{i}", f"t{i}", "To Do") for i in range(1, 4)]
+    )
+    _install_fake_post(monkeypatch, _FakeResponse(payload), captured)
+    items, has_more = search_my_issues("https://x.com", "e@x.com", "tok", limit=2)
+    assert has_more is True
+    assert len(items) == 2
+    assert [it.key for it in items] == ["CDS-1", "CDS-2"]
+
+
+def test_search_my_issues_handles_empty_payload(monkeypatch):
+    captured = {}
+    _install_fake_post(monkeypatch, _FakeResponse({}), captured)
+    items, has_more = search_my_issues("https://x.com", "e@x.com", "tok")
+    assert items == []
+    assert has_more is False
+
+
+def test_search_my_issues_handles_missing_summary_and_status(monkeypatch):
+    captured = {}
+    payload = {"issues": [{"key": "CDS-9", "fields": {}}]}
+    _install_fake_post(monkeypatch, _FakeResponse(payload), captured)
+    items, _ = search_my_issues("https://x.com", "e@x.com", "tok")
+    assert items[0].key == "CDS-9"
+    assert items[0].title == "(no title)"
+    assert items[0].status == "?"
+
+
+def test_search_my_issues_propagates_http_error(monkeypatch):
+    captured = {}
+    _install_fake_post(
+        monkeypatch, _FakeResponse({}, status_code=400), captured,
+    )
+    with pytest.raises(RuntimeError, match="HTTP 400"):
+        search_my_issues("https://x.com", "e@x.com", "tok")

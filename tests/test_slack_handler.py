@@ -57,6 +57,7 @@ def _stub_execute(outcome=None):
 
 def _deps(
     execute=None, registry=None, context=None, create_issue=None,
+    search_issues=None,
 ):
     from bot_lib.context import ContextStore
     deps = HandlerDeps(
@@ -70,6 +71,8 @@ def _deps(
     )
     if create_issue is not None:
         deps.create_issue = create_issue
+    if search_issues is not None:
+        deps.search_issues = search_issues
     return deps
 
 
@@ -1335,6 +1338,125 @@ def test_jira_create_unauthorized_user_silently_ignored():
         text="jira create -k 작업 -t 제목",
         user_id="UOTHER", say=say,
         deps=_deps(create_issue=fake),
+    )
+    assert calls == []
+    assert sent == []
+
+
+# ---- jira get ----
+
+
+def _stub_search_issues(items=None, has_more=False):
+    """items: list of (key, title, status_name) tuples."""
+    from bot_lib.jira_client import JiraIssueSummary
+
+    calls = []
+    summaries = [
+        JiraIssueSummary(key=k, title=t, status=s) for (k, t, s) in (items or [])
+    ]
+
+    def fake(**kwargs):
+        calls.append(kwargs)
+        return summaries, has_more
+
+    return calls, fake
+
+
+def test_jira_get_default_runs_with_no_status_filter():
+    calls, fake = _stub_search_issues(items=[("CDS-1", "first", "To Do")])
+    sent, say = _record_say()
+    handle_message(
+        text="jira get",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    assert len(calls) == 1
+    assert calls[0]["status"] is None
+    assert calls[0]["limit"] == 20
+    assert any("CDS-1" in m and "first" in m for m in sent)
+
+
+def test_jira_get_with_status_alias_passes_canonical_jira_status():
+    calls, fake = _stub_search_issues(items=[("CDS-2", "wip", "In Progress")])
+    sent, say = _record_say()
+    handle_message(
+        text="jira get -s inprogress",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    assert calls[0]["status"] == "In Progress"
+    # Header uses the alias label, not the raw Jira status name
+    assert any("inprogress" in m for m in sent)
+
+
+def test_jira_get_empty_result_replies_with_no_match():
+    calls, fake = _stub_search_issues(items=[])
+    sent, say = _record_say()
+    handle_message(
+        text="jira get -s done",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    assert any("이슈 없음" in m and "done" in m for m in sent)
+
+
+def test_jira_get_has_more_appends_footer():
+    items = [(f"CDS-{i}", f"t{i}", "To Do") for i in range(1, 4)]
+    calls, fake = _stub_search_issues(items=items, has_more=True)
+    sent, say = _record_say()
+    handle_message(
+        text="jira get -s todo",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    assert any("더 좁히려면" in m for m in sent)
+
+
+def test_jira_get_includes_browse_url_per_issue():
+    calls, fake = _stub_search_issues(items=[("CDS-7", "title", "Done")])
+    sent, say = _record_say()
+    handle_message(
+        text="jira get",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    out = "\n".join(sent)
+    assert "https://x.atlassian.net/browse/CDS-7" in out
+
+
+def test_jira_get_parse_error_replies_and_skips_api():
+    calls, fake = _stub_search_issues()
+    sent, say = _record_say()
+    handle_message(
+        text="jira get -s blocked",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    assert calls == []
+    assert any("지원 status" in m for m in sent)
+
+
+def test_jira_get_api_error_replies_with_message():
+    sent, say = _record_say()
+
+    def fail(**kwargs):
+        raise RuntimeError("HTTP 401 unauthorized")
+
+    handle_message(
+        text="jira get",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fail),
+    )
+    assert any("Jira 조회 실패" in m and "HTTP 401" in m for m in sent)
+
+
+def test_jira_get_unauthorized_user_silently_ignored():
+    calls, fake = _stub_search_issues(items=[("CDS-1", "x", "To Do")])
+    sent, say = _record_say()
+    handle_message(
+        text="jira get",
+        user_id="UOTHER", say=say,
+        deps=_deps(search_issues=fake),
     )
     assert calls == []
     assert sent == []

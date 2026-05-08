@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -7,6 +7,7 @@ from requests.auth import HTTPBasicAuth
 JIRA_ISSUE_PATH = "/rest/api/3/issue/"
 JIRA_CREATE_PATH = "/rest/api/3/issue"
 JIRA_MYSELF_PATH = "/rest/api/3/myself"
+JIRA_SEARCH_PATH = "/rest/api/3/search/jql"
 DEFAULT_PROJECT = "CDS"   # Single-tenant bot: hardcoded.
 RECENT_COMMENT_LIMIT = 5
 HTTP_TIMEOUT = 30
@@ -44,6 +45,13 @@ class JiraCreatedIssue:
     url: str
 
 
+@dataclass(frozen=True)
+class JiraIssueSummary:
+    key: str
+    title: str
+    status: str
+
+
 def fetch_issue(base_url: str, email: str, token: str, key: str) -> JiraIssue:
     """GET /rest/api/3/issue/{key} and parse into JiraIssue."""
     url = base_url.rstrip("/") + JIRA_ISSUE_PATH + key
@@ -52,6 +60,52 @@ def fetch_issue(base_url: str, email: str, token: str, key: str) -> JiraIssue:
     r = requests.get(url, auth=auth, headers=headers, timeout=HTTP_TIMEOUT)
     r.raise_for_status()
     return _parse_issue(r.json())
+
+
+def search_my_issues(
+    base_url: str,
+    email: str,
+    token: str,
+    *,
+    status: Optional[str] = None,
+    project_key: str = DEFAULT_PROJECT,
+    limit: int = 20,
+) -> tuple[list[JiraIssueSummary], bool]:
+    """JQL search restricted to the API token owner's assigned issues.
+
+    `status` is the exact Jira status name (e.g. "In Progress"). None → no
+    status filter. Returns up to `limit` summaries plus a `has_more` flag
+    (we fetch limit+1 to detect overflow without a separate count call).
+    """
+    url = base_url.rstrip("/") + JIRA_SEARCH_PATH
+    auth = HTTPBasicAuth(email, token)
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+
+    jql_parts = [f"project = {project_key}", "assignee = currentUser()"]
+    if status:
+        safe = status.replace('"', '\\"')
+        jql_parts.append(f'status = "{safe}"')
+    jql = " AND ".join(jql_parts) + " ORDER BY updated DESC"
+
+    body = {
+        "jql": jql,
+        "fields": ["summary", "status"],
+        "maxResults": limit + 1,
+    }
+    r = requests.post(url, json=body, auth=auth, headers=headers, timeout=HTTP_TIMEOUT)
+    r.raise_for_status()
+    raw = (r.json() or {}).get("issues") or []
+
+    summaries = [
+        JiraIssueSummary(
+            key=item.get("key", ""),
+            title=(item.get("fields") or {}).get("summary") or "(no title)",
+            status=(((item.get("fields") or {}).get("status") or {}).get("name")) or "?",
+        )
+        for item in raw[:limit]
+    ]
+    has_more = len(raw) > limit
+    return summaries, has_more
 
 
 def get_my_account_id(base_url: str, email: str, token: str) -> str:

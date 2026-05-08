@@ -29,6 +29,12 @@ HELP_TEXT = (
     "  예:\n"
     "    jira create -k 작업 -t API 개선 검토\n"
     "    jira create -k 버그 -t 로그인 실패 -d Chrome 120 이상에서 재현\n\n"
+    "이슈 조회 (jira get):\n"
+    "  jira get [-s <상태>]   - 내 이슈 (assignee=나) 최근 업데이트순, 최대 20개\n"
+    "    -s: todo | inprogress | review | resolved | done | all (기본: all)\n"
+    "  예:\n"
+    "    jira get\n"
+    "    jira get -s inprogress\n\n"
     "컨텍스트 (CLI 플래그):\n"
     "  init <repo>                       - 컨텍스트 set (remote·branch는 projects.md default)\n"
     "  init <repo> -r <remote>           - + remote override\n"
@@ -84,6 +90,9 @@ class HandlerDeps:
     env_bot_user: Optional[str] = None   # fallback when context.who is None
     cancel_registry: Optional[CancellationRegistry] = None
     create_issue: Callable[..., jira_client.JiraCreatedIssue] = jira_client.create_issue
+    search_issues: Callable[..., tuple[list[jira_client.JiraIssueSummary], bool]] = (
+        jira_client.search_my_issues
+    )
     bot_account_id: Optional[str] = None   # Jira accountId of the API token owner
 
 
@@ -113,6 +122,11 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
     # jira create -k <kind> -t <title> [-d <body>] [-p <PROJECT>]
     if commands.is_create(stripped):
         _handle_jira_create(text, deps, say)
+        return
+
+    # jira get [-s <status>]
+    if commands.is_get(stripped):
+        _handle_jira_get(text, deps, say)
         return
 
     # §B init <repo> [-r remote] [-b branch]
@@ -256,6 +270,62 @@ def _handle_jira_create(text: str, deps: HandlerDeps, say: Say) -> None:
         f"  분류: {parsed.kind}\n"
         f"  제목: {parsed.title}"
     )
+
+
+# ---- jira get ----
+
+
+JIRA_GET_LIMIT = 20
+
+
+def _handle_jira_get(text: str, deps: HandlerDeps, say: Say) -> None:
+    try:
+        parsed = commands.parse_get(text)
+    except commands.CommandError as e:
+        say(f"❌ {e}")
+        return
+
+    try:
+        issues, has_more = deps.search_issues(
+            base_url=deps.jira_base_url,
+            email=deps.jira_email,
+            token=deps.jira_token,
+            status=parsed.status,
+            limit=JIRA_GET_LIMIT,
+        )
+    except Exception as e:
+        say(f"❌ Jira 조회 실패: {type(e).__name__}: {e}")
+        return
+
+    say(_format_jira_get_results(issues, has_more, parsed.alias, deps.jira_base_url))
+
+
+def _format_jira_get_results(
+    issues: list[jira_client.JiraIssueSummary],
+    has_more: bool,
+    alias: str,
+    base_url: str,
+) -> str:
+    label = "전체" if alias == "all" else alias
+    if not issues:
+        return f"❌ `{label}` 상태 이슈 없음 (assignee=나)"
+
+    base = base_url.rstrip("/")
+    header = f"내 이슈 — `{label}` ({len(issues)}개, 최근 업데이트순):"
+    rows = []
+    key_w = max(len(iss.key) for iss in issues)
+    status_w = max(len(iss.status) for iss in issues)
+    for iss in issues:
+        link = f"<{base}/browse/{iss.key}|{iss.key.ljust(key_w)}>"
+        rows.append(f"  {link}  · {iss.status.ljust(status_w)}  · {iss.title}")
+
+    footer = ""
+    if has_more:
+        footer = (
+            f"\n  … {JIRA_GET_LIMIT}개 초과. "
+            "더 좁히려면 `-s <status>` 사용."
+        )
+    return header + "\n" + "\n".join(rows) + footer
 
 
 # ---- init / status / clear (§B) ----
