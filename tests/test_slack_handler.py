@@ -57,7 +57,7 @@ def _stub_execute(outcome=None):
 
 def _deps(
     execute=None, registry=None, context=None, create_issue=None,
-    search_issues=None,
+    search_issues=None, claude_available=True,
 ):
     from bot_lib.context import ContextStore
     deps = HandlerDeps(
@@ -68,6 +68,7 @@ def _deps(
         jira_token="t",
         execute=execute or (lambda *a, **kw: None),
         context=context,
+        claude_available=claude_available,
     )
     if create_issue is not None:
         deps.create_issue = create_issue
@@ -162,6 +163,58 @@ def test_run_without_dash_d_passes_none_instruction(tmp_path):
         deps=_deps(execute=fake, context=_ctx_store(tmp_path)),
     )
     assert calls[0]["cmd"].instruction is None
+
+
+def test_run_without_claude_replies_with_install_hint(tmp_path):
+    calls, fake = _stub_execute()
+    sent, say = _record_say()
+    handle_message(
+        text="run fix CDS-99",
+        user_id=ALLOWED, say=say,
+        deps=_deps(
+            execute=fake, context=_ctx_store(tmp_path),
+            claude_available=False,
+        ),
+    )
+    # execute must NOT have been called
+    assert calls == []
+    # error message must surface the install hint
+    joined = "\n".join(sent)
+    assert "claude" in joined and "PATH" in joined
+    assert "docs.claude.com" in joined
+
+
+def test_run_with_claude_proceeds_normally(tmp_path):
+    calls, fake = _stub_execute()
+    sent, say = _record_say()
+    handle_message(
+        text="run fix CDS-99",
+        user_id=ALLOWED, say=say,
+        deps=_deps(
+            execute=fake, context=_ctx_store(tmp_path),
+            claude_available=True,
+        ),
+    )
+    assert len(calls) == 1
+
+
+def test_run_catches_claude_error_from_orchestrator(tmp_path):
+    """If claude was on PATH at startup but the actual call raises ClaudeError
+    (binary disappeared, auth blew up, etc.), the handler should reply with
+    a clean error instead of letting the exception bubble out."""
+    from bot_lib import claude_runner
+
+    def boom(cmd, project, **kwargs):
+        raise claude_runner.ClaudeError("claude CLI not found on PATH")
+
+    sent, say = _record_say()
+    handle_message(
+        text="run fix CDS-99",
+        user_id=ALLOWED, say=say,
+        deps=_deps(execute=boom, context=_ctx_store(tmp_path)),
+    )
+    joined = "\n".join(sent)
+    assert "claude 호출 실패" in joined
 
 
 def test_progress_callback_wired_to_say(tmp_path):

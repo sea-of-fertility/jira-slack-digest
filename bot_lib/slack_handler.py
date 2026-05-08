@@ -4,7 +4,7 @@ import shlex
 from dataclasses import dataclass, field, replace
 from typing import Callable, Mapping, Optional
 
-from bot_lib import commands, git_ops, jira_client, orchestrator
+from bot_lib import claude_runner, commands, git_ops, jira_client, orchestrator
 from bot_lib.cancellation import CancellationRegistry
 from bot_lib.context import Context, ContextStore
 from bot_lib.mutex import RepoMutex
@@ -99,6 +99,7 @@ class HandlerDeps:
         jira_client.search_my_issues
     )
     bot_account_id: Optional[str] = None   # Jira accountId of the API token owner
+    claude_available: bool = True   # set by bot.py via claude_runner.is_claude_available()
 
 
 def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> None:
@@ -223,6 +224,15 @@ def handle_message(*, text: str, user_id: str, say: Say, deps: HandlerDeps) -> N
 
 
 def _run_with_mutex(cmd, project: Project, deps: HandlerDeps, say: Say, *, who: Optional[str] = None) -> None:
+    if not deps.claude_available:
+        say(
+            "❌ `claude` CLI 가 이 PC 의 PATH 에 없습니다 — `run` 명령은 claude Code 가 필수입니다.\n"
+            f"   {claude_runner.CLAUDE_INSTALL_HINT}\n"
+            "   설치 후 봇을 재시작하세요 (`jira install` 또는 "
+            "`launchctl kickstart -k gui/$UID/local.jira-bot`)."
+        )
+        return
+
     lock = deps.mutex.lock_for(project.name)
     if not lock.acquire(blocking=False):
         say(f"⏳ `{project.name}` 작업 중. 순서대로 처리되니 대기해 주세요.")
@@ -231,16 +241,23 @@ def _run_with_mutex(cmd, project: Project, deps: HandlerDeps, say: Say, *, who: 
     try:
         who_label = f" / {who}" if who else ""
         say(f"⏳ {cmd.type}/{cmd.issue} 시작합니다 ({project.name}/{project.remote}{who_label})")
-        outcome = deps.execute(
-            cmd,
-            project,
-            who=who,
-            jira_base_url=deps.jira_base_url,
-            jira_email=deps.jira_email,
-            jira_token=deps.jira_token,
-            progress=say,
-            cancel_registry=deps.cancel_registry,
-        )
+        try:
+            outcome = deps.execute(
+                cmd,
+                project,
+                who=who,
+                jira_base_url=deps.jira_base_url,
+                jira_email=deps.jira_email,
+                jira_token=deps.jira_token,
+                progress=say,
+                cancel_registry=deps.cancel_registry,
+            )
+        except claude_runner.ClaudeError as e:
+            # claude was on PATH at startup but the actual call failed
+            # (e.g. binary disappeared mid-job, or auth/network blew up
+            # in a way the runner couldn't recover from).
+            say(f"❌ claude 호출 실패: {e}")
+            return
         say(format_outcome(outcome))
     finally:
         lock.release()

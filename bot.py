@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from bot_lib import jira_client, setup_wizard
+from bot_lib import claude_runner, jira_client, setup_wizard
 from bot_lib.cancellation import CancellationRegistry
 from bot_lib.context import ContextStore
 from bot_lib.registry import RegistryError, load_registry
@@ -134,6 +134,14 @@ def main(argv: list[str] | None = None) -> None:
         )
         bot_account_id = None
 
+    claude_available = claude_runner.is_claude_available()
+    if not claude_available:
+        sys.stderr.write(
+            "[warn] `claude` CLI 가 PATH 에 없습니다 — `run` 명령은 동작하지 않습니다.\n"
+            f"       {claude_runner.CLAUDE_INSTALL_HINT}\n"
+            "       조회·이슈 생성 같은 다른 명령은 정상 동작합니다.\n"
+        )
+
     deps = HandlerDeps(
         allowed_user_id=_require("SLACK_USER_ID"),
         registry=registry,
@@ -144,6 +152,7 @@ def main(argv: list[str] | None = None) -> None:
         env_bot_user=env_bot_user,
         cancel_registry=cancel_registry,
         bot_account_id=bot_account_id,
+        claude_available=claude_available,
     )
 
     app = App(token=_require("SLACK_BOT_TOKEN"))

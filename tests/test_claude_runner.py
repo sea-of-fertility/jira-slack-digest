@@ -4,7 +4,13 @@ from dataclasses import dataclass
 
 import pytest
 
-from bot_lib.claude_runner import ClaudeError, ClaudeRun, TokenUsage, run_claude
+from bot_lib.claude_runner import (
+    ClaudeError,
+    ClaudeRun,
+    TokenUsage,
+    is_claude_available,
+    run_claude,
+)
 
 
 @dataclass
@@ -311,6 +317,25 @@ def test_token_usage_total_input_includes_cache():
 
 
 # ---- live (opt-in: pytest -m live) ----
+
+
+# ---- is_claude_available ----
+
+
+def test_is_claude_available_true_when_on_path(monkeypatch):
+    monkeypatch.setattr(
+        "bot_lib.claude_runner.shutil.which",
+        lambda name: "/usr/local/bin/claude" if name == "claude" else None,
+    )
+    assert is_claude_available() is True
+
+
+def test_is_claude_available_false_when_missing(monkeypatch):
+    monkeypatch.setattr("bot_lib.claude_runner.shutil.which", lambda name: None)
+    assert is_claude_available() is False
+
+
+# ---- live smoke test ----
 
 
 @pytest.mark.live

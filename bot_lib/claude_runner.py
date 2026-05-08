@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
@@ -6,6 +7,21 @@ from typing import Callable, Optional, Sequence
 DEFAULT_DISALLOWED = ("Bash", "WebFetch", "WebSearch")
 DEFAULT_MODEL = "sonnet"
 DEFAULT_TIMEOUT = 600
+
+CLAUDE_INSTALL_HINT = (
+    "설치: https://docs.claude.com/en/docs/claude-code/quickstart"
+)
+
+
+def is_claude_available() -> bool:
+    """Cheap PATH probe — does the `claude` binary exist on the runtime PATH?
+
+    Doesn't actually exec it (auth / network errors only show up in the real
+    `--print` call). Used at bot startup and as a runtime gate before the
+    orchestrator spawns claude, so a missing CLI fails the user's `run`
+    command with a clear Slack reply instead of a silent traceback.
+    """
+    return shutil.which("claude") is not None
 
 
 class ClaudeError(Exception):
