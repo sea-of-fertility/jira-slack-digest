@@ -413,6 +413,28 @@ def test_search_my_issues_status_filter_quoted(monkeypatch):
     assert 'status = "In Progress"' in captured["json"]["jql"]
 
 
+def test_search_my_issues_omits_project_clause_when_key_is_none(monkeypatch):
+    captured = {}
+    _install_fake_post(
+        monkeypatch, _FakeResponse(_summary_payload()), captured,
+    )
+    search_my_issues("https://x.com", "e@x.com", "tok", project_key=None)
+    jql = captured["json"]["jql"]
+    assert "project =" not in jql
+    assert "assignee = currentUser()" in jql
+
+
+def test_search_my_issues_uses_explicit_project_key(monkeypatch):
+    captured = {}
+    _install_fake_post(
+        monkeypatch, _FakeResponse(_summary_payload()), captured,
+    )
+    search_my_issues("https://x.com", "e@x.com", "tok", project_key="OKT")
+    jql = captured["json"]["jql"]
+    assert "project = OKT" in jql
+    assert f"project = {DEFAULT_PROJECT}" not in jql
+
+
 def test_search_my_issues_escapes_double_quote_in_status(monkeypatch):
     captured = {}
     _install_fake_post(

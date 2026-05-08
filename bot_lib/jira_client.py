@@ -68,20 +68,24 @@ def search_my_issues(
     token: str,
     *,
     status: Optional[str] = None,
-    project_key: str = DEFAULT_PROJECT,
+    project_key: Optional[str] = DEFAULT_PROJECT,
     limit: int = 20,
 ) -> tuple[list[JiraIssueSummary], bool]:
     """JQL search restricted to the API token owner's assigned issues.
 
     `status` is the exact Jira status name (e.g. "In Progress"). None → no
-    status filter. Returns up to `limit` summaries plus a `has_more` flag
-    (we fetch limit+1 to detect overflow without a separate count call).
+    status filter. `project_key=None` drops the `project = ...` clause so the
+    search spans every project the token can see. Returns up to `limit`
+    summaries plus a `has_more` flag (we fetch limit+1 to detect overflow
+    without a separate count call).
     """
     url = base_url.rstrip("/") + JIRA_SEARCH_PATH
     auth = HTTPBasicAuth(email, token)
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
-    jql_parts = [f"project = {project_key}", "assignee = currentUser()"]
+    jql_parts = ["assignee = currentUser()"]
+    if project_key:
+        jql_parts.insert(0, f"project = {project_key}")
     if status:
         safe = status.replace('"', '\\"')
         jql_parts.append(f'status = "{safe}"')

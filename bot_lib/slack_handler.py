@@ -32,11 +32,14 @@ HELP_TEXT = (
     "    jira create -k 작업 -t API 개선 검토\n"
     "    jira create -k 버그 -t 로그인 실패 -d Chrome 120 이상에서 재현\n\n"
     "이슈 조회 (jira get):\n"
-    "  jira get [-s <상태>]   - 내 이슈 (assignee=나) 최근 업데이트순, 최대 20개\n"
+    "  jira get [-s <상태>] [-p <키|all>]   - 내 이슈 (assignee=나) 최근 업데이트순, 최대 20개\n"
     "    -s: todo | inprogress | review | resolved | done | all (기본: all)\n"
+    "    -p: 프로젝트 키 (예: CDS, OKT) 또는 `all` 로 전 프로젝트 (기본: CDS)\n"
     "  예:\n"
     "    jira get\n"
-    "    jira get -s inprogress\n\n"
+    "    jira get -s inprogress\n"
+    "    jira get -s todo -p all          - 모든 프로젝트의 todo\n"
+    "    jira get -s todo -p OKT          - OKT 프로젝트만\n\n"
     "컨텍스트 / 쓰기 명령:\n"
     "  init <repo>                       - 컨텍스트 set (remote·branch 는 projects.md default)\n"
     "  init <repo> -r <remote>           - + remote override\n"
@@ -287,33 +290,57 @@ def _handle_jira_get(text: str, deps: HandlerDeps, say: Say) -> None:
         say(f"❌ {e}")
         return
 
+    if parsed.project == "all":
+        project_key: Optional[str] = None
+    elif parsed.project is None:
+        project_key = jira_client.DEFAULT_PROJECT
+    else:
+        project_key = parsed.project
+
     try:
         issues, has_more = deps.search_issues(
             base_url=deps.jira_base_url,
             email=deps.jira_email,
             token=deps.jira_token,
             status=parsed.status,
+            project_key=project_key,
             limit=JIRA_GET_LIMIT,
         )
     except Exception as e:
         say(f"❌ Jira 조회 실패: {type(e).__name__}: {e}")
         return
 
-    say(_format_jira_get_results(issues, has_more, parsed.alias, deps.jira_base_url))
+    say(_format_jira_get_results(
+        issues, has_more, parsed.alias, parsed.project, deps.jira_base_url,
+    ))
 
 
 def _format_jira_get_results(
     issues: list[jira_client.JiraIssueSummary],
     has_more: bool,
     alias: str,
+    project: Optional[str],
     base_url: str,
 ) -> str:
-    label = "전체" if alias == "all" else alias
+    status_label = "전체" if alias == "all" else alias
+    if project == "all":
+        project_label = "전 프로젝트"
+    elif project is None:
+        project_label = jira_client.DEFAULT_PROJECT
+    else:
+        project_label = project
+
     if not issues:
-        return f"❌ `{label}` 상태 이슈 없음 (assignee=나)"
+        return (
+            f"❌ `{project_label}` / `{status_label}` "
+            "상태 이슈 없음 (assignee=나)"
+        )
 
     base = base_url.rstrip("/")
-    header = f"내 이슈 — `{label}` ({len(issues)}개, 최근 업데이트순):"
+    header = (
+        f"내 이슈 — `{project_label}` / `{status_label}` "
+        f"({len(issues)}개, 최근 업데이트순):"
+    )
     rows = []
     key_w = max(len(iss.key) for iss in issues)
     status_w = max(len(iss.status) for iss in issues)
@@ -325,7 +352,7 @@ def _format_jira_get_results(
     if has_more:
         footer = (
             f"\n  … {JIRA_GET_LIMIT}개 초과. "
-            "더 좁히려면 `-s <status>` 사용."
+            "더 좁히려면 `-s <status>` / `-p <키>` 사용."
         )
     return header + "\n" + "\n".join(rows) + footer
 

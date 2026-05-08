@@ -34,7 +34,10 @@ KIND_KO_TO_EN = {
 KIND_EN_CANONICAL = {"epic": "Epic", "task": "Task", "bug": "Bug", "story": "Story"}
 
 # `jira get` — list assigned issues by status
-GET_USAGE = "형식: jira get [-s <todo|inprogress|review|resolved|done|all>]"
+GET_USAGE = (
+    "형식: jira get [-s <todo|inprogress|review|resolved|done|all>] "
+    "[-p <키|all>]"
+)
 # Maps user-facing alias → exact Jira status name (None = no status filter).
 # NOTE: `review → "In Review"` is an assumption — adjust if your Jira workflow
 # uses "Code Review" / "Review" / etc.
@@ -191,8 +194,11 @@ def parse_create(text: str) -> ParsedCreate:
 
 @dataclass(frozen=True)
 class ParsedGet:
-    status: Optional[str]   # canonical Jira status name; None = no filter (all)
-    alias: str              # the user-facing alias (e.g. "todo", "all") for display
+    status: Optional[str]    # canonical Jira status name; None = no filter
+    alias: str               # user-facing status alias for display ("todo", "all", ...)
+    project: Optional[str]   # None = -p omitted (caller picks default);
+                             # "all" = cross-project (no project filter);
+                             # uppercase key (e.g. "CDS") = specific project
 
 
 def is_get(text: str) -> bool:
@@ -201,17 +207,18 @@ def is_get(text: str) -> bool:
 
 
 def parse_get(text: str) -> ParsedGet:
-    """Parse `jira get [-s <alias>]`. Default (no -s) = all."""
+    """Parse `jira get [-s <alias>] [-p <key|all>]`."""
     stripped = text.strip()
     if not is_get(stripped):
         raise CommandError(GET_USAGE)
     rest = stripped[len("jira get"):].strip()
 
     if not rest:
-        return ParsedGet(status=None, alias="all")
+        return ParsedGet(status=None, alias="all", project=None)
 
     tokens = rest.split()
     alias_raw: Optional[str] = None
+    project_raw: Optional[str] = None
     i = 0
     while i < len(tokens):
         tok = tokens[i]
@@ -220,14 +227,35 @@ def parse_get(text: str) -> ParsedGet:
                 raise CommandError("`-s` 다음에 값이 필요합니다.")
             alias_raw = tokens[i + 1]
             i += 2
+        elif tok == "-p":
+            if i + 1 >= len(tokens):
+                raise CommandError("`-p` 다음에 값이 필요합니다.")
+            project_raw = tokens[i + 1]
+            i += 2
         else:
             raise CommandError(f"인식 못한 토큰: `{tok}`. {GET_USAGE}")
 
     if alias_raw is None:
-        return ParsedGet(status=None, alias="all")
+        status: Optional[str] = None
+        alias = "all"
+    else:
+        alias = alias_raw.lower()
+        if alias not in STATUS_ALIASES:
+            valid = ", ".join(STATUS_ALIASES)
+            raise CommandError(f"지원 status: {valid}")
+        status = STATUS_ALIASES[alias]
 
-    alias = alias_raw.lower()
-    if alias not in STATUS_ALIASES:
-        valid = ", ".join(STATUS_ALIASES)
-        raise CommandError(f"지원 status: {valid}")
-    return ParsedGet(status=STATUS_ALIASES[alias], alias=alias)
+    if project_raw is None:
+        project: Optional[str] = None
+    elif project_raw.lower() == "all":
+        project = "all"
+    else:
+        # Jira keys are conventionally uppercase A-Z + digits/underscore;
+        # uppercase the input so `-p cds` and `-p CDS` are equivalent.
+        project = project_raw.upper()
+        if not project or not project.replace("_", "").isalnum():
+            raise CommandError(
+                f"`-p` 값은 Jira 프로젝트 키 또는 `all`. 받음: `{project_raw}`"
+            )
+
+    return ParsedGet(status=status, alias=alias, project=project)

@@ -305,3 +305,46 @@ def test_parse_get_rejects_unknown_token():
 def test_parse_get_rejects_unknown_flag():
     with pytest.raises(CommandError, match="인식 못한 토큰"):
         parse_get("jira get -x todo")
+
+
+def test_parse_get_no_p_flag_leaves_project_none():
+    p = parse_get("jira get")
+    assert p.project is None
+
+
+def test_parse_get_p_all_canonicalizes_to_all():
+    p = parse_get("jira get -p all")
+    assert p.project == "all"
+
+
+def test_parse_get_p_all_case_insensitive():
+    p = parse_get("jira get -p ALL")
+    assert p.project == "all"
+
+
+def test_parse_get_p_specific_key_uppercased():
+    p = parse_get("jira get -p okt")
+    assert p.project == "OKT"
+
+
+def test_parse_get_p_combines_with_status():
+    p = parse_get("jira get -s todo -p OKT")
+    assert p.alias == "todo"
+    assert p.status == "To Do"
+    assert p.project == "OKT"
+
+
+def test_parse_get_p_order_independent():
+    a = parse_get("jira get -p OKT -s todo")
+    b = parse_get("jira get -s todo -p OKT")
+    assert a == b
+
+
+def test_parse_get_rejects_dangling_dash_p():
+    with pytest.raises(CommandError, match="-p.*값"):
+        parse_get("jira get -p")
+
+
+def test_parse_get_rejects_invalid_project_key():
+    with pytest.raises(CommandError, match="프로젝트 키"):
+        parse_get("jira get -p ABC-123")

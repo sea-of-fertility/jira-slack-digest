@@ -1450,6 +1450,62 @@ def test_jira_get_api_error_replies_with_message():
     assert any("Jira 조회 실패" in m and "HTTP 401" in m for m in sent)
 
 
+def test_jira_get_default_passes_default_project_key():
+    calls, fake = _stub_search_issues(items=[("CDS-1", "x", "To Do")])
+    sent, say = _record_say()
+    handle_message(
+        text="jira get",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    from bot_lib.jira_client import DEFAULT_PROJECT
+    assert calls[0]["project_key"] == DEFAULT_PROJECT
+
+
+def test_jira_get_p_all_passes_none_project_key():
+    calls, fake = _stub_search_issues(items=[("OKT-9", "x", "To Do")])
+    sent, say = _record_say()
+    handle_message(
+        text="jira get -s todo -p all",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    assert calls[0]["project_key"] is None
+
+
+def test_jira_get_p_specific_passes_uppercased_key():
+    calls, fake = _stub_search_issues(items=[("OKT-9", "x", "To Do")])
+    sent, say = _record_say()
+    handle_message(
+        text="jira get -p okt",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    assert calls[0]["project_key"] == "OKT"
+
+
+def test_jira_get_header_shows_project_label_for_all():
+    calls, fake = _stub_search_issues(items=[("OKT-1", "x", "To Do")])
+    sent, say = _record_say()
+    handle_message(
+        text="jira get -p all",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    assert any("전 프로젝트" in m for m in sent)
+
+
+def test_jira_get_header_shows_explicit_project_label():
+    calls, fake = _stub_search_issues(items=[("OKT-1", "x", "To Do")])
+    sent, say = _record_say()
+    handle_message(
+        text="jira get -p OKT",
+        user_id=ALLOWED, say=say,
+        deps=_deps(search_issues=fake),
+    )
+    assert any("OKT" in m and "전체" in m for m in sent)
+
+
 def test_jira_get_unauthorized_user_silently_ignored():
     calls, fake = _stub_search_issues(items=[("CDS-1", "x", "To Do")])
     sent, say = _record_say()
