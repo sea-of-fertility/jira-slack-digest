@@ -19,6 +19,6 @@
 [ceph-api]
 path = "/Users/hyungjunpark/IdeaProjects/ceph-service-api"
 default_branch = "dev"
-remote = "305"
+remote = "306"
 test_cmd = "./gradlew test --no-daemon"
 test_timeout = 600
